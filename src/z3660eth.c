@@ -603,7 +603,17 @@ caddr_t arg;
 	info->poll_id = timeout(z3660eth_poll, arg, Z3660ETH_POLL_TICKS);
 }
 
-/* Drain frames deferred by xmit (txwin-busy).  Mirrors hydra transmit_interrupt. */
+/*
+ * Drain frames deferred by xmit (txwin-busy).  Mirrors hydra transmit_interrupt.
+ *
+ * A stream that cannot transmit right now ends ITS drain (break), not the whole
+ * sweep: `return` here -- the inherited hydra shape -- starved every stream after
+ * the first blocked one for a full poll tick, even though the blocking condition
+ * (info->tx_busy, or regs == 0) is per-board and the next stream would simply
+ * defer too.  The cost of continuing is one getq/putbq pair per remaining stream
+ * (Z3660ETH_MAXDEV is 5); the cost of returning was a whole tick of head-of-line
+ * blocking for every other bound SAP.
+ */
 static void
 z3660eth_tx_drain(board_index)
 int board_index;
@@ -618,7 +628,7 @@ int board_index;
 	    while ((mp = getq(wrq)) != NULL) {
 		if (!z3660ethxmit(wrq, mp)) {
 		    putbq(wrq, mp);
-		    return;
+		    break;		/* this stream only -- try the next */
 		}
 	    }
 	}
@@ -789,9 +799,32 @@ mblk_t *mp;
 	return 1;
     }
 
+    /*
+     * Anything else: DLPI requires an explicit DL_ERROR_ACK naming the offending
+     * primitive (dl_errno = DL_BADPRIM, "primitive not known by the provider").
+     * Silently freeing the message -- the inherited behaviour -- left the DLS
+     * user waiting for an ack that would never arrive.  Built the same way as the
+     * other acks above: the primitive is saved first, because `p` points into the
+     * message we are about to free.
+     */
     default:
+    {
+	dl_error_ack_t *ep;
+	unsigned long bad_primitive = p->dl_primitive;
+
 	freemsg(mp);
+	if (!(mp = allocb(sizeof(dl_error_ack_t), BPRI_MED)))
+	    return 1;
+	ep = (dl_error_ack_t *)mp->b_wptr;
+	mp->b_datap->db_type = M_PCPROTO;
+	ep->dl_primitive = DL_ERROR_ACK;
+	ep->dl_error_primitive = bad_primitive;
+	ep->dl_errno = DL_BADPRIM;
+	ep->dl_unix_errno = 0;
+	mp->b_wptr += sizeof(dl_error_ack_t);
+	qreply(q, mp);
 	return 1;
+    }
     }
     return 0;
 }
@@ -1080,6 +1113,18 @@ mblk_t *mp;
 	putnext(RD(q), mp);
 	return;
     }
+
+    /*
+     * Declared in z3660ethuser.h but never implemented.  Given their own case
+     * labels rather than left to fall into the default arm so the state is
+     * visible at the point a future implementor will look: these are recognised
+     * commands with no implementation, not unknown commands.  Behaviour is the
+     * same EINVAL NAK either way.
+     */
+    case Z3660ETH_CLEAR_STATUS:
+    case Z3660ETH_GET_CONFIG:
+	z3660eth_ioc_nak(q, mp, EINVAL);
+	return;
 
     default:
 	z3660eth_ioc_nak(q, mp, EINVAL);
