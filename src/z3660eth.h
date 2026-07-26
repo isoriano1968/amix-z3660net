@@ -74,6 +74,13 @@
 
 #define ETHERTYPE_IP		0x0800
 #define ETHERTYPE_ARP		0x0806
+/*
+ * 4.2BSD trailer encapsulation.  Retained ONLY to document the ethertype range
+ * 0x1000..0x1010 that this driver deliberately does NOT decode: the inherited
+ * aen/hydra trailer arm read up to ~6.7 KB past the 1518-byte RX buffer and could
+ * undersize the payload mblk (negative trailn) -- see the no-trailer-decode note
+ * above toss_packet_up_stream() in z3660eth.c.  Do not reintroduce a decode arm.
+ */
 #define ETHERTYPE_TRAIL		0x1000
 #define ETHERTYPE_NTRAILER	16
 

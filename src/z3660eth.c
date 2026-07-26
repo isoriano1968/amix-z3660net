@@ -797,15 +797,32 @@ mblk_t *mp;
 
 /* ----------------------------------------------------------------------------
  * RX -> DLPI delivery.  SAP demux, own-MAC/broadcast filter, DL_UNITDATA_IND.
- * Copied from hydra toss_packet_up_stream (trailer branch kept but inert under
- * -trailers).  `count` is the full frame length (header + payload).
+ * Adapted from hydra/aen toss_packet_up_stream.  `count` is the full frame length
+ * (header + payload); z3660eth_drain has already range-checked it to
+ * [ETH_HEADER_SIZE, MAX_BUFFER_LENGTH], so `length` below is in [0, 1504].
+ *
+ * NO TRAILER DECODE -- deliberately.  The stock aen/hydra ancestor decoded the
+ * 4.2BSD trailer encapsulation (ethertype 0x1000..0x1010) here; that arm was
+ * inherited verbatim and has been DELETED because it was doubly unsafe:
+ *   * length = (ethertype - ETHERTYPE_TRAIL) * 512 reaches 8192, and the trailer
+ *     count word was then read at packet[ETH_HEADER_SIZE + length + ETH_TYPE_SIZE]
+ *     = up to offset 8208 of the 1518-byte rxbuff -- a ~6.7 KB out-of-bounds read;
+ *   * the resulting trailn could be NEGATIVE, so allocb(length + trailn) was
+ *     smaller than the following bcopy(..., length) -- an mblk heap overflow.
+ * It was dead for legitimate traffic (SVR4 IP never negotiates trailers, open()
+ * advertises IFF_NOTRAILERS, and bring-up is `ifconfig zen0 ... -trailers`), but
+ * it was reachable by any crafted frame off the wire.  Trailer-tagged frames now
+ * take the ordinary path: sap stays 0x1000..0x1010, no stream binds those SAPs,
+ * so they are counted in rx_no_sap and dropped.  Every other ethertype (IP 0x0800,
+ * ARP 0x0806, ...) already took the else-arm, so normal RX is byte-for-byte
+ * unchanged.  Do not reintroduce a decode arm.
  * ------------------------------------------------------------------------- */
 static void
 toss_packet_up_stream(packet, board_index, count)
 char *packet;
 int board_index, count;
 {
-    int j, length, trailn;
+    int j, length;
     unsigned short sap;
     z3660eth_board_t *board = &z3660eth_board[board_index];
     z3660eth_info_t *info = &board->z3660eth_info;
@@ -821,17 +838,7 @@ int board_index, count;
     if (sap == ETHERTYPE_ARP) board->z3660eth_status.rx_arp_seen++;
     if (sap == ETHERTYPE_IP)  board->z3660eth_status.rx_ip_seen++;
 
-    if (sap >= ETHERTYPE_TRAIL &&
-	sap <= (unsigned short)(ETHERTYPE_TRAIL + ETHERTYPE_NTRAILER)) {
-	length = (sap - ETHERTYPE_TRAIL) * 512;
-	trailn = (*((unsigned short *)
-		    &packet[ETH_HEADER_SIZE + length + ETH_TYPE_SIZE]) -
-		  ETH_TYPE_SIZE - ETH_LENGTH_SIZE);
-	sap = *((unsigned short *)&packet[ETH_HEADER_SIZE + length]);
-    } else {
-	length = count - ETH_HEADER_SIZE;
-	trailn = 0;
-    }
+    length = count - ETH_HEADER_SIZE;
 
     for (j = 0; j < Z3660ETH_MAXDEV; j++, zp++) {
 	mblk_t *mp = (mblk_t *)NULL;
@@ -864,7 +871,7 @@ int board_index, count;
 	    if (canput(zp->q->q_next)) {
 		if ((mp = allocb(sizeof(union DL_primitives) +
 				 (2 * ETH_ADDRESS_SIZE), BPRI_MED)) != NULL &&
-		    (mp->b_cont = allocb(length + trailn, BPRI_MED)) != NULL) {
+		    (mp->b_cont = allocb(length, BPRI_MED)) != NULL) {
 		    register dl_unitdata_ind_t *dp =
 			(dl_unitdata_ind_t *)mp->b_wptr;
 
@@ -886,12 +893,6 @@ int board_index, count;
 			(2 * ETH_ADDRESS_SIZE);
 		    mp->b_datap->db_type = M_PROTO;
 
-		    if (trailn) {
-			bcopy((caddr_t)&packet[ETH_HEADER_SIZE + length +
-					       ETH_TYPE_SIZE + ETH_LENGTH_SIZE],
-			      (caddr_t)mp->b_cont->b_wptr, trailn);
-			mp->b_cont->b_wptr += trailn;
-		    }
 		    bcopy((caddr_t)&packet[ETH_HEADER_SIZE],
 			  (caddr_t)mp->b_cont->b_wptr, length);
 		    mp->b_cont->b_wptr += length;
