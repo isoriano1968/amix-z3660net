@@ -86,7 +86,8 @@ static void z3660eth_drain();
 static void z3660eth_tx_drain();
 static void toss_packet_up_stream();
 static int  z3660ethopen(), z3660ethclose(), z3660ethwput(), z3660ethwsrv();
-static void z3660ethioctl();
+static void z3660ethioctl(), z3660eth_ioc_nak();
+static int  z3660eth_ioc_arg();
 static int  z3660ethproto(), z3660ethxmit();
 static int  z3660eth_map(), z3660eth_initialize();
 
@@ -917,6 +918,60 @@ int board_index, count;
 /* ----------------------------------------------------------------------------
  * ioctls: SIOC*IFFLAGS ack, board count, config + status snapshots.
  * ------------------------------------------------------------------------- */
+
+/*
+ * NAK an M_IOCTL the way the rest of the driver does (M_IOCNAK + errno back up
+ * the read side), dropping any data block still attached to it.
+ */
+static void
+z3660eth_ioc_nak(q, mp, err)
+queue_t *q;
+mblk_t *mp;
+int err;
+{
+    register struct iocblk *iocbp = (struct iocblk *)mp->b_rptr;
+
+    if (mp->b_cont) {
+	freemsg(mp->b_cont);
+	mp->b_cont = NULL;
+    }
+    mp->b_datap->db_type = M_IOCNAK;
+    iocbp->ioc_count = 0;
+    iocbp->ioc_rval = 0;
+    iocbp->ioc_error = err;
+    putnext(RD(q), mp);
+}
+
+/*
+ * Fetch the user-address argument of a TRANSPARENT M_IOCTL out of its b_cont,
+ * with the checks stock aen.c omits.  aen (and this driver before this change)
+ * did an unconditional
+ *	caddr_t arg = *(caddr_t *)mp->b_cont->b_rptr;
+ * so a malformed ioctl -- an M_IOCTL with NO b_cont at all, which is exactly what
+ * a non-TRANSPARENT I_STR ioctl carrying zero bytes of data looks like -- was a
+ * kernel NULL-deref reachable from an unprivileged ioctl() on /dev/zen0.  A
+ * b_cont shorter than a pointer would likewise over-read it.
+ *
+ * Returns 1 with *argp set (0 for the non-TRANSPARENT case, where there is no
+ * user address to fetch and the caller does not use it), or 0 => the caller must
+ * NAK with EINVAL.
+ */
+static int
+z3660eth_ioc_arg(mp, iocbp, argp)
+mblk_t *mp;
+struct iocblk *iocbp;
+caddr_t *argp;
+{
+    *argp = (caddr_t)0;
+
+    if (iocbp->ioc_count != TRANSPARENT)
+	return 1;
+    if (mp->b_cont == NULL || blklen(mp->b_cont) < (int)sizeof(caddr_t))
+	return 0;
+    *argp = *(caddr_t *)mp->b_cont->b_rptr;
+    return 1;
+}
+
 static void
 z3660ethioctl(q, mp)
 queue_t *q;
@@ -956,12 +1011,18 @@ mblk_t *mp;
 
     case Z3660ETH_NUMBER_OF_BOARDS:
     {
-	caddr_t arg = *(caddr_t *)mp->b_cont->b_rptr;
-	freemsg(mp->b_cont);
+	caddr_t arg;
+
+	if (!z3660eth_ioc_arg(mp, iocbp, &arg)) {
+	    z3660eth_ioc_nak(q, mp, EINVAL);
+	    return;
+	}
+	if (mp->b_cont) {
+	    freemsg(mp->b_cont);
+	    mp->b_cont = NULL;
+	}
 	if (!(mp->b_cont = allocb(sizeof(int), BPRI_MED))) {
-	    mp->b_datap->db_type = M_IOCNAK;
-	    iocbp->ioc_error = ENOMEM;
-	    putnext(RD(q), mp);
+	    z3660eth_ioc_nak(q, mp, ENOMEM);
 	    return;
 	}
 	*(int *)mp->b_cont->b_rptr = z3660eth_number_of_boards;
@@ -984,16 +1045,22 @@ mblk_t *mp;
 
     case Z3660ETH_GET_STATUS:
     {
-	caddr_t arg = *(caddr_t *)mp->b_cont->b_rptr;
+	caddr_t arg;
+
+	if (!z3660eth_ioc_arg(mp, iocbp, &arg)) {
+	    z3660eth_ioc_nak(q, mp, EINVAL);
+	    return;
+	}
 	board->z3660eth_status.if_ipackets = board->ifstats.ifs_ipackets;
 	board->z3660eth_status.if_opackets = board->ifstats.ifs_opackets;
 	board->z3660eth_status.if_ierrors = board->ifstats.ifs_ierrors;
 	board->z3660eth_status.if_oerrors = board->ifstats.ifs_oerrors;
-	freemsg(mp->b_cont);
+	if (mp->b_cont) {
+	    freemsg(mp->b_cont);
+	    mp->b_cont = NULL;
+	}
 	if (!(mp->b_cont = allocb(sizeof(z3660eth_status_t), BPRI_MED))) {
-	    mp->b_datap->db_type = M_IOCNAK;
-	    iocbp->ioc_error = ENOMEM;
-	    putnext(RD(q), mp);
+	    z3660eth_ioc_nak(q, mp, ENOMEM);
 	    return;
 	}
 	*(z3660eth_status_t *)mp->b_cont->b_rptr = board->z3660eth_status;
@@ -1015,10 +1082,7 @@ mblk_t *mp;
     }
 
     default:
-	mp->b_datap->db_type = M_IOCNAK;
-	iocbp->ioc_count = 0;
-	iocbp->ioc_error = EINVAL;
-	putnext(RD(q), mp);
+	z3660eth_ioc_nak(q, mp, EINVAL);
 	return;
     }
 }
