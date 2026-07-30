@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-07-30 — cdevsw major renumbered 48 → 51; Q1 (AMIX level-6 servicing) resolved
+
+Renumbered `z3660eth`'s char major **48 → 51** repo-wide (`c949380`, date note corrected
+`b9991e3`). 48 was chosen in 2026-06 only because it was an empty `nostr` row on the
+stock/a4091 kernel; the 2026-07 community sweep shows it is contested — `zz9000-amix`'s
+`integration/kernel.c.txt` documents an unpublished dev tree using "47 for Hydra, 48 for
+random, 49 for ZZ9000, 50 for sad", 49 (zz9000) and 68 (va2000) are published claims, and 47
+is a live double claim by hydra and the stock 1992 `contrib/mx` driver. 51 is the lowest slot
+of the ecosystem-verified-free set 51–67/69 (CDEVSIZE = 70; 7/38/39/44/45 are traps).
+Convention and evidence: grimoire-amix's Major-Number Registry.
+Sites: `driver.conf`, `tools/patch-kernel.sh`, `userland/{S99zen,bringup.sh,network-config.zen}`,
+`BUILD.md` (carries the authoritative why-51 note), `docs/ETHERNET-SCOPING.md`,
+`docs/ETHERNET-SCOPING-evidence.md` (supersession banner + prescriptive sites).
+**Docs-and-config only — built kernels and shipped `/dev/zen0` nodes still carry 48 until the
+next build (P5.4). A 51-built kernel with a stale `c 48 0` node opens an empty cdevsw row, and
+`S99zen` only mknods when the node is absent — existing roots need the stale node removed or
+re-mknod'd at P5.4.**
+
+Q1 RESOLVED (`f12b2d5`) — `docs/ETHERNET-SCOPING.md` §2.5 now reads resolved instead of OPEN.
+AMIX does wire the level-6 autovector (`vec.s:36` → `p6int`), but `p6int` (`ttrap.s:118-134`) is
+hardwired to CIA-B: it gates on Paula `INTREQR` bit 13, dismisses only Paula's latch, and calls
+the single fixed handler `aciabintr`. There is no `int6_tbl` and no level-6 registration API.
+So the Z3660's `/INT6` passes the gate but nothing ever acks the board, and because `/INT6`→EXTER
+is level-sensitive it re-latches on every `rte` — the unbounded IPL6 storm behind the 2026-06-21
+hard-lock. Confirms the shipped `ZZ_CONFIG_DISABLE` + bounded polled drain (`b06cf45`) as correct
+architecture, not a workaround.
+
 ## 2026-07-26 — z3660eth defect packet (P0.3): three deferred STREAMS defects fixed
 
 Found during the 2026-07-13 STREAMS "out of blocks" investigation and deliberately deferred then
