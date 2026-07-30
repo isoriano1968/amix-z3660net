@@ -6,6 +6,10 @@ I have a comprehensive evidence base from the six surveys. Let me produce the au
 
 Target: `z3660eth` — a native AMIX (Commodore Amiga Unix SVR4.0, m68k 68030) STREAMS/DLPI Style-1 connectionless Ethernet provider for the Z3660 accelerator's onboard GEM, spoken via the existing Z3660 firmware mailbox (the network analogue of `z3660.c` SCSI).
 
+> ⚠️ **This is the raw pre-review draft + adversarial-review record, kept for its evidence and file:line citations — it is NOT current guidance.** The authoritative documents are `driver.conf`, `BUILD.md` and `docs/ETHERNET-SCOPING.md` (FINAL).
+>
+> **Major-number supersession (2026-07-27):** this draft picked cdevsw major **48**; the driver's major is now **51**. Every prescriptive `48` below has been renumbered, but the *evidence* statements about the stock table (e.g. "`kernel.c:398` is the empty `/*48*/` row", "48–69 are `nostr` filler") are left as-read: they are facts about the **stock** `cdevsw[]`, not about our claim. 48 turned out to be contested by an unpublished community tree, 49 is published `zz9000`, 68 is `va2000` — the verified-free set is **51–67 and 69** and 51 is its lowest slot. Rationale in `BUILD.md` §2(b); evidence in `../grimoire-amix/docs/reference/major-number-registry.md`.
+
 ---
 
 ## 1. Executive Summary + Feasibility Verdict
@@ -139,8 +143,8 @@ ISR (`z3660ethintr`): `if (panicstr) return`; per-board RUNNING gate; read `REG_
 ## 6. Kernel Integration + Kerntools (build-kernel.sh STREAMS path)
 
 ### 6.1 Exact `master.d/kernel.c` edits (three insertions + externs; mirror `hydra*`)
-1. **cdevsw row** — pick a **free major** (slots 48–69 are empty `nostr`; e.g. **48**). Replace that slot's `…,nostr,nullflag,/*48*/` with:
-   `ND,ND,ND,ND,ND,ND,ND,ND,ND,ND,notty,&z3660ethinfo,nullflag, /*48=z3660eth*/`
+1. **cdevsw row** — take a **free major**; the driver's is **51** (superseded from 48 — see the banner at the top). Replace that slot's `…,nostr,nullflag,/*51*/` with:
+   `ND,ND,ND,ND,ND,ND,ND,ND,ND,ND,notty,&z3660ethinfo,nullflag, /*51=z3660eth*/`
    and add `extern struct streamtab z3660ethinfo;` after `kernel.c:266` (`extern struct streamtab hydrainfo;`).
 2. **int2_tbl entry** (pending Q1) — add `z3660ethintr,` before the terminating `0};` (after `hydraintr,` at `kernel.c:194`), and append `z3660ethintr` to the extern at `kernel.c:187`.
 3. **init_tbl entry** — add `z3660ethinit,` before `0};` (after `hydrainit,` at `kernel.c:61`), and add `z3660ethinit` to the extern at `kernel.c:38`.
@@ -163,7 +167,7 @@ Plus two insertions in `amiga/driver/Makefile` (anchor on the `hydra/exp` lines)
 ### 6.3 build-kernel.sh STREAMS-path extension (concrete spec — Survey E §5)
 The SCSI path generates `scsicard[]` rows into `alien/sd.c` and never touches `kernel.c`; STREAMS cannot reuse it. Add a typed `driver.conf` stanza:
 ```
-net  z3660eth.c  major=48  streamtab=z3660ethinfo  init=z3660ethinit  intr=z3660ethintr  "Z3660 Ethernet"
+net  z3660eth.c  major=51  streamtab=z3660ethinfo  init=z3660ethinit  intr=z3660ethintr  "Z3660 Ethernet"
 ```
 New build-kernel.sh steps (delta):
 1. Parse `net` stanzas (fields: src, major, streamtab/init/intr symbols, name); keep `scsi` stanzas on the existing path.
@@ -176,11 +180,11 @@ New build-kernel.sh steps (delta):
 
 ## 7. Userland Bring-up (real HW @ 192.168.2.39)
 
-Assume major **48**, interface name **`zen0`** (or `z3660net0`). `slink addaen` is **generic** ("link an Ethernet DLPI driver under IP+ARP") — hydra reuses it verbatim; we do too. SVR4.0 has **no `plumb`** and **literal IP only** (never `\`uname -n\`` — the ~90 s DNS-stall trap).
+Major **51**, interface name **`zen0`** (or `z3660net0`). `slink addaen` is **generic** ("link an Ethernet DLPI driver under IP+ARP") — hydra reuses it verbatim; we do too. SVR4.0 has **no `plumb`** and **literal IP only** (never `\`uname -n\`` — the ~90 s DNS-stall trap).
 
 **One-shot (single-user/testing):**
 ```sh
-mknod /dev/zen0 c 48 0
+mknod /dev/zen0 c 51 0
 /usr/sbin/slink                                  # if boot didn't: strcf boot{} (tcp/udp/icmp/rawip + loopback)
 /usr/sbin/slink addaen /dev/zen0 zen0            # links driver under /dev/ip (with 'app' pushed) AND /dev/arp
 /usr/sbin/ifconfig zen0 192.168.2.39 netmask 255.255.255.0 up -trailers
@@ -625,7 +629,7 @@ Both deliver paths gate on `canput(aen->q->q_next)` (`aen.c:1245,1289`) and bump
 **Net:** The streamtab/qinit shape (M8/M11), MTU/trailers (M9), and the "RX is putnext-from-interrupt" model are correctly captured. The two BLOCKERs are real and both concern things the design either contradicted itself on (B1: claims hydra, lists aen) or deferred too casually (B2: the CRC boundary is the documented ARP-killer and the three sources genuinely disagree — resolve it from the firmware GEM config + a one-frame length probe, not "later on real HW"). I5 is the subtlest: the design transplanted aen's flow-control idiom onto hardware with no TX-completion interrupt, so the deferred-TX path as written can stall.
 
 ## LENS — build-integration
-The slot 48 row is confirmed (13 fields + trailing comma = 14 tokens). The design's choice of major 48 with the 13-field replacement is correct. The "major 7" alternative the survey mentioned is wrong (slot 7 `/*7=win?*/` is a real reserved entry, but it's `nostr` so technically replaceable — still, 48 is cleaner). 
+The empty filler row is confirmed (13 fields + trailing comma = 14 tokens). The design's choice of an unlabelled `nostr` slot with the 13-field replacement is correct — the row *shape* verified here is index-independent, so it survives the later renumber to **51** (see the banner). The "major 7" alternative the survey mentioned is wrong (slot 7 `/*7=win?*/` is a real reserved entry, but it's `nostr` so technically replaceable — still, an unlabelled filler row is cleaner). 
 
 I now have all the evidence needed. Let me compile the adversarial review.
 
@@ -690,7 +694,7 @@ Passing `z3660eth.c` as a `$SRCS` arg makes it `touch z3660eth.c` **inside `amig
 
 ## IMPORTANT-4 — `driver.conf` `net` stanza parser collides with the existing positional SCSI parser
 
-**Claim (design §6.3):** add a typed line `net z3660eth.c major=48 streamtab=… init=… intr=… "Z3660 Ethernet"` and "Parse `net` stanzas … keep `scsi` stanzas on the existing path."
+**Claim (design §6.3):** add a typed line `net z3660eth.c major=51 streamtab=… init=… intr=… "Z3660 Ethernet"` and "Parse `net` stanzas … keep `scsi` stanzas on the existing path."
 
 **Why incomplete:** The current `build-kernel.sh` loop reads **positionally**: `while read -r pn fn rest` then `base="${fn%queue}"` (`build-kernel.sh:69,84`). A `net …` line would be parsed as `pn=net`, `fn=z3660eth.c`, and `base="${fn%queue}"` = `z3660eth.c` (no `queue` suffix to strip), then `[ -f "$d/src/$src" ]` with `src` mis-extracted from `rest` → the existing loop either errors (`missing …/src/…`) or worse, silently generates a bogus `scsicard[]` row with `&z3660eth.c` as a function pointer. The design says "keep scsi stanzas on the existing path" but the existing path has **no type dispatch** — adding `net` requires a real `case "$pn" in net) … ;; *) <existing scsi> ;; esac` rewrite of the read loop, plus the z3660 repo's **own `driver.conf` currently has only the SCSI line** (verified) so the eth line lives in a *new* conf or a new repo. This is more than "parse net stanzas" — it's a parser refactor with back-compat risk to the proven A4091/Z3660 SCSI builds. **Severity: IMPORTANT** (must not regress the working SCSI path).
 
@@ -708,7 +712,7 @@ Passing `z3660eth.c` as a `$SRCS` arg makes it `touch z3660eth.c` **inside `amig
 
 **Claim (Survey E §1, echoed as an option):** "The next genuinely free low slot is **major 7**."
 
-**Why wrong:** Slot 7 is **not empty** — it is a reserved/occupied row `ND,…,notty,nostr,nullflag, /*7=win?*/` (`kernel.c:342`). It is `nostr` (no streamtab) so technically overwritable, but it carries a `/*7=win?*/` comment suggesting an intended device. The design's actual choice — **major 48** — is correct: slot 48 is a clean `nostr` filler with no comment (`kernel.c:398`), and the 13-field replacement row the design specifies matches the char-cdevsw column count exactly (verified: slot rows in the char table are 13 fields: 10×`ND` + `notty` + `&info` + `nullflag`). Just don't fall back to 7. **Severity: MINOR** (the primary pick is right; flag the bad alternative).
+**Why wrong:** Slot 7 is **not empty** — it is a reserved/occupied row `ND,…,notty,nostr,nullflag, /*7=win?*/` (`kernel.c:342`). It is `nostr` (no streamtab) so technically overwritable, but it carries a `/*7=win?*/` comment suggesting an intended device. The design's actual choice — an **unlabelled `nostr` filler row** — is correct: `kernel.c:398-419` are clean `nostr` fillers carrying no comment, and the 13-field replacement row the design specifies matches the char-cdevsw column count exactly (verified: slot rows in the char table are 13 fields: 10×`ND` + `notty` + `&info` + `nullflag`). Just don't fall back to 7. **Severity: MINOR** (the primary pick is right; flag the bad alternative).
 
 ---
 
@@ -722,7 +726,7 @@ Passing `z3660eth.c` as a `$SRCS` arg makes it `touch z3660eth.c` **inside `amig
 
 ## Sections that are CORRECT
 
-- **cdevsw row format / major 48** (§6.1 #1): the 13-field `ND×10,notty,&z3660ethinfo,nullflag` row is exactly right for a leaf STREAMS driver, `nullflag` (newstyle) not `oldflag`, matching aen/hydra (`kernel.c:357/397`). ✔
+- **cdevsw row format / the claimed major** (§6.1 #1): the 13-field `ND×10,notty,&z3660ethinfo,nullflag` row is exactly right for a leaf STREAMS driver, `nullflag` (newstyle) not `oldflag`, matching aen/hydra (`kernel.c:357/397`). ✔
 - **No `fmodsw[]` / `unix.c` / second registry** (§6.1, Survey E §4): confirmed — major↔streamtab binding is purely cdevsw slot position; a leaf driver is not a pushable module. ✔
 - **int2_tbl is a NULL-terminated poll-all array; append-before-`0`** (§6.1 #2): confirmed structurally (`int2_tbl[]` `kernel.c:188-195`, terminated by `0}`). Externs precede the array (`kernel.c:187`). ✔ — *but the level (INT2 vs INT6, Q1) remains genuinely open and is correctly flagged as such; the build mechanics of adding the row are right regardless of level.*
 - **Subdir build is reachable**: `amiga/Makefile O = … driver/exp …` → `driver/Makefile` recurses into subdirs → top `relocunix` rule `cd amiga; make`. The new subdir WILL be compiled and linked once the two `driver/Makefile` edits land. ✔
@@ -1442,7 +1446,7 @@ struct streamtab aeninfo =
 ```
 Hydra is byte-identical in shape (`hydra.c:67-85`) — module id `0x6879`/`"hya"`, `qinit`s pointing at `hydraopen/hydraclose/hydrawput/hydrawsrv`. The module_info bounds (`aen.h:41-44`, `hydra.h:13-16`): MIN ≈ min Ethernet frame minus CRC, MAX = MTU, HIWAT = 5 KB, LOWAT = 2/3 HIWAT. **A leaf (non-mux) driver leaves `st_muxrinit`/`st_muxwinit` NULL.**
 
-> Practical note for our driver: pick a free major. The next genuinely free low slot is **major 7** (`kernel.c:342 /*7=win?*/` is `nostr`), or any of 48/49/51-69 which are all empty `ND...,nostr,nullflag` rows (`kernel.c:398-419`). aen(18)/hydra(47) are taken.
+> Practical note for our driver: pick a free major. The next genuinely free low slot is **major 7** (`kernel.c:342 /*7=win?*/` is `nostr`), or any of 48/49/51-69 which are all empty `ND...,nostr,nullflag` rows (`kernel.c:398-419`). aen(18)/hydra(47) are taken. *(Later correction: an empty row in the **stock** table does not mean an unclaimed major — 48 and 49 are claimed by out-of-tree community drivers. The safe set is **51–67 and 69**; we take **51**. See the banner at the top.)*
 
 ---
 
@@ -1574,7 +1578,7 @@ The SCSI line carries SCSI-only fields (product number, queue fn, HBA name). A n
 # new STREAMS net stanza:
 net  z3660eth.c  major=7  streamtab=z3660ethinfo  init=z3660ethinit  intr=z3660ethintr  "Z3660 Ethernet"
 ```
-Parsed fields: `src` (under `src/`), `major` (free cdevsw slot — validate against the live `kernel.c` so we don't collide; 7 or 48+ are free), `streamtab`/`init`/`intr` symbol names, display name. The on-box basename derives from `src` (e.g. `z3660eth.c` → subdir `z3660eth/`, object `z3660eth.o`).
+Parsed fields: `src` (under `src/`), `major` (free cdevsw slot — validate against the live `kernel.c` so we don't collide; take 51–67 or 69, never 7), `streamtab`/`init`/`intr` symbol names, display name. The on-box basename derives from `src` (e.g. `z3660eth.c` → subdir `z3660eth/`, object `z3660eth.o`).
 
 ### Files it must generate / patch
 
@@ -1761,7 +1765,7 @@ This is exactly the **presence-gate pattern**: three commands `&&`-chained so ea
 
 ## 5. Concrete bring-up runbook for OUR driver on real HW @ `192.168.2.39`
 
-Assume our cdevsw major = **`M`** (pick a free slot — `master.d/kernel.c` shows **48–69 are all `nostr` free**; slot 18=aen, 47=hydra are taken; **e.g. use 48**) and interface name **`z3660net0`** (or shorter `zen0` — keep ≤ the minor/name conventions; examples below use `zen0`).
+Assume our cdevsw major = **`M`** (pick a free slot — `master.d/kernel.c` shows **48–69 are all `nostr` free** in the stock table; slot 18=aen, 47=hydra are taken; **we use 51** — 48 and 49 look empty here but carry out-of-tree community claims, see the banner) and interface name **`z3660net0`** (or shorter `zen0` — keep ≤ the minor/name conventions; examples below use `zen0`).
 
 ### One-shot manual bring-up (single-user / testing)
 ```sh
@@ -1770,7 +1774,7 @@ Assume our cdevsw major = **`M`** (pick a free slot — `master.d/kernel.c` show
 /usr/sbin/ifconfig lo0 127.0.0.1 up
 
 # 1. device node (major = our cdevsw slot, minor 0 = board0/clone-SAP)
-mknod /dev/zen0 c 48 0
+mknod /dev/zen0 c 51 0
 
 # 2. presence gate is OPTIONAL on real HW (our analogue of `aen -S`); if we ship one, gate on it.
 #    Otherwise just attempt the link:
@@ -1804,11 +1808,11 @@ ping 192.168.2.1
    ```
 3. **`/etc/inet/rc.inet`** — default route is already `route add default 192.168.2.1 1` (`rc.inet:42`); keep it. Add any extra static routes here.
 4. **No new `strcf` function needed** — `addaen` is generic (links under both `/dev/ip` and `/dev/arp`).
-5. **Device node persistence:** `mknod /dev/zen0 c 48 0` must exist on the **root FS** (`/dev` is on-disk, not devfs) — create it once, it persists. If staging a fresh root, add it to whatever MAKEDEV/install step the kerntools deploy uses.
+5. **Device node persistence:** `mknod /dev/zen0 c 51 0` must exist on the **root FS** (`/dev` is on-disk, not devfs) — create it once, it persists. If staging a fresh root, add it to whatever MAKEDEV/install step the kerntools deploy uses.
 6. **DNS:** leave OFF (stock) unless needed; if enabled, also empty `/etc/domain` and keep the literal-IP boot config or every boot adds ~180 s (`networking.md:91-136`).
 
 ### Kernel-side edits these depend on (Survey-E territory, restated for completeness)
-In `master.d/kernel.c`: (a) `extern struct streamtab z3660info;` near `aeninfo`/`hydrainfo` (`kernel.c:265-266`); (b) put `&z3660info` in cdevsw **slot 48** (`kernel.c:398`, currently `nostr /*48*/`); (c) add `z3660intr` to `int2_tbl[]` (`kernel.c:188-195`) — *externs must precede the array*; (d) optionally `z3660init` in `init_tbl[]` (`kernel.c:44-62`). Then `mknod` + `slink` + `ifconfig` as above.
+In `master.d/kernel.c`: (a) `extern struct streamtab z3660info;` near `aeninfo`/`hydrainfo` (`kernel.c:265-266`); (b) put `&z3660info` in cdevsw **slot 51** (one of the `nostr` filler rows at `kernel.c:398-419`; the row is tagged `/*51*/`); (c) add `z3660intr` to `int2_tbl[]` (`kernel.c:188-195`) — *externs must precede the array*; (d) optionally `z3660init` in `init_tbl[]` (`kernel.c:44-62`). Then `mknod` + `slink` + `ifconfig` as above.
 
 ---
 

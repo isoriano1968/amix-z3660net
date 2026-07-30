@@ -32,12 +32,26 @@ amixsync.py push src/Makefile         /usr/sys/amiga/driver/z3660eth/Makefile
 extern struct streamtab aeninfo;
 extern struct streamtab z3660ethinfo;     /* <-- add */
 ```
-**(b)** Claim a free `cdevsw[]` slot. Slot **48** is `nostr` (free) on the stock /
-a4091 kernel — VERIFY it is still the empty `/*48*/` row, then replace it:
+**(b)** Claim the `cdevsw[]` slot. `z3660eth` takes major **51** — VERIFY it is still
+the empty `/*51*/` row (`…,notty,nostr,nullflag,`) before writing, then replace it:
 ```
-/* was: */ ND,ND,ND,ND,ND,ND,ND,ND,ND,ND,notty,nostr,nullflag,         /*48*/
-/* now: */ ND,ND,ND,ND,ND,ND,ND,ND,ND,ND,notty,&z3660ethinfo,nullflag,  /*48=z3660eth*/
+/* was: */ ND,ND,ND,ND,ND,ND,ND,ND,ND,ND,notty,nostr,nullflag,         /*51*/
+/* now: */ ND,ND,ND,ND,ND,ND,ND,ND,ND,ND,notty,&z3660ethinfo,nullflag,  /*51=z3660eth*/
 ```
+> **Why major 51** (renumbered from 48 on 2026-07-27). 51 is the **lowest slot of the
+> ecosystem-verified-free set 51–67 and 69**. The original 48 was picked in 2026-06 simply
+> because it was an empty `nostr` row on the stock/a4091 kernel — but it turns out to be
+> **contested**: `zz9000-amix`'s `integration/kernel.c.txt` documents an unpublished
+> development tree using *"47 for Hydra, **48 for random**, 49 for ZZ9000, and 50 for sad"*.
+> The surrounding claims: **49** = `zz9000` (published), **68** = `va2000`, **47** = a double
+> claim by hydra *and* the stock `contrib/mx` MAX-125 driver (the ecosystem's oldest
+> collision, 1992). Slots **7, 38, 39, 44, 45** are traps (reserved markers, or
+> `KERNEL_DEBUGGER`-only), and **≥ 70 does not exist** — `CDEVSIZE` is 70, so a higher major
+> needs the array extended. That leaves 51–67 and 69; we take the lowest.
+> Convention and full cross-tree evidence: **`../grimoire-amix/docs/reference/major-number-registry.md`**
+> (the Major-Number Registry — "take 51–67 or 69; respect an existing community claim, even a
+> weak one"). Renumbering was cheap for us and free for them: only the `/dev/zen0` node and the
+> cdevsw row move. **48 is vacated — do not reuse it.**
 > No `int2_tbl[]` / `init_tbl[]` edit. The driver uses **lazy-open** (autoconfig on
 > first `open`, like `aen`) and **polled RX** (a `timeout()` callout, since AMIX has no
 > level-6 hook for the firmware's INT6). This is what makes the GEM-less build box boot
@@ -81,8 +95,8 @@ amixsh.py "shutdown -i6 -g0 -y"          # reboot
 ```
 
 ## 6. Phase-1 gate (build box) — expected result
-The box boots normally; `z3660eth` is registered at cdevsw major 48 but finds no
-Z3660 GEM (the build box emulates an a2065). `mknod /dev/zen0 c 48 0; cat </dev/zen0`
+The box boots normally; `z3660eth` is registered at cdevsw major 51 but finds no
+Z3660 GEM (the build box emulates an a2065). `mknod /dev/zen0 c 51 0; cat </dev/zen0`
 (or `slink addaen /dev/zen0 zen0`) should yield **ENXIO**, and the kernel must NOT
 panic. That proves the whole integration + build path independent of the datapath.
 

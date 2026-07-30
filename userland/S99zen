@@ -1,7 +1,7 @@
 #!/bin/sh
 # S99zen -- bring up the Z3660 native ethernet (zen0) at boot.
 #
-# Install as /etc/rc2.d/S99zen on the AMIX root.  cdevsw major for z3660eth = 48.
+# Install as /etc/rc2.d/S99zen on the AMIX root.  cdevsw major for z3660eth = 51.
 #
 # The whole bring-up is BACKGROUNDED so a datapath problem can never hang the boot
 # (the box still reaches login).  On the WinUAE build box this just ENXIOs (no GEM)
@@ -14,7 +14,7 @@
 #    ("Device busy" from the bare slink is expected and harmless.)
 #  * It can take the full boot (incl. fsck+reboot if the SD image is dirty) for zen0
 #    to appear -- don't conclude "broken" from an early check.
-[ -c /dev/zen0 ] || mknod /dev/zen0 c 48 0
+[ -c /dev/zen0 ] || mknod /dev/zen0 c 51 0
 (
   sleep 5
   /usr/sbin/slink                       # ensure the base inet streams are linked

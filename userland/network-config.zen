@@ -7,7 +7,7 @@
 # ** Use a LITERAL IP, never `uname -n` ** -- on SVR4.0 the name path triggers a DNS
 # lookup that stalls boot ~180s when the resolver can't reach a server.
 #
-# The device node must exist on the on-disk root once:  mknod /dev/zen0 c 48 0
+# The device node must exist on the on-disk root once:  mknod /dev/zen0 c 51 0
 #
 /usr/amiga/bin/zen -S && \
     /usr/sbin/slink addaen /dev/zen0 zen0 && \

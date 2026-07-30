@@ -8,7 +8,7 @@ Target: **`z3660eth`** — a native AMIX (Commodore Amiga Unix SVR4.0, m68k 6803
 
 ## ★ PHASE-1 STATUS — COMPLETE (2026-06-21, WinUAE boot-gate)
 
-**z3660eth compiles clean, links into a clean kernel, BOOTS to `login:` (no panic), registers at cdevsw slot 48, and `open(/dev/zen0)` returns `errno=6 ENXIO`** (the lazy-open probe correctly finds no GEM on WinUAE) — the box survives. That is the Phase-1 acceptance gate. Driver fixes committed in `amix-z3660net@84c9a4f`; corrected build tooling in `amix-kerntools@e5d000b`. **NEXT = Phase-2 (TX) / Phase-3 (RX, ARP+ping @ .39) on the real A4000+Z3660** (the WinUAE a2065 has no GEM, so the datapath is untestable here — needs the physical box + KVM, a separate session).
+**z3660eth compiles clean, links into a clean kernel, BOOTS to `login:` (no panic), registers in its cdevsw slot, and `open(/dev/zen0)` returns `errno=6 ENXIO`** (the lazy-open probe correctly finds no GEM on WinUAE) — the box survives. That is the Phase-1 acceptance gate. Driver fixes committed in `amix-z3660net@84c9a4f`; corrected build tooling in `amix-kerntools@e5d000b`. **NEXT = Phase-2 (TX) / Phase-3 (RX, ARP+ping @ .39) on the real A4000+Z3660** (the WinUAE a2065 has no GEM, so the datapath is untestable here — needs the physical box + KVM, a separate session).
 
 Three things this scoping did NOT anticipate, learned during bring-up (details in memory `wip-ethernet`):
 
@@ -260,9 +260,11 @@ ISR (`z3660ethintr`): `if (panicstr) return`; per-board RUNNING gate; read `REG_
 ### 6.1 `master.d/kernel.c` edits (three insertions + externs)
 
 Three insertions, **anchored on `aen*` (stock), NOT `hydra*`** — see BLOCKER-1 below:
-1. **cdevsw row** — pick a **free major** (slots 48–69 are empty `nostr`; e.g. **48**; do **NOT** use 7 — [FIX M2 — build] slot 7 is a reserved `/*7=win?*/` row). The 13-field row:
-   `ND,ND,ND,ND,ND,ND,ND,ND,ND,ND,notty,&z3660ethinfo,nullflag, /*48=z3660eth*/`
+1. **cdevsw row** — the driver's major is **51** (do **NOT** use 7 — [FIX M2 — build] slot 7 is a reserved `/*7=win?*/` row). The 13-field row:
+   `ND,ND,ND,ND,ND,ND,ND,ND,ND,ND,notty,&z3660ethinfo,nullflag, /*51=z3660eth*/`
    and add `extern struct streamtab z3660ethinfo;` next to `extern struct streamtab aeninfo;` (`kernel.c:265`).
+
+   > **Why 51 — renumbered from 48 on 2026-07-27.** 51 is the lowest slot of the ecosystem-verified-free set **51–67 and 69**. The stock table leaves 48, 49 and 51–69 empty, which is why 48 was picked in 2026-06 — but 48 is **contested** by an unpublished community development tree (`zz9000-amix`'s `integration/kernel.c.txt`: *"47 for Hydra, 48 for random, 49 for ZZ9000, 50 for sad"*), 49 is published `zz9000`, 68 is `va2000`, and 47 is claimed by hydra *and* the stock 1992 `contrib/mx` driver. `CDEVSIZE` = 70, so ≥ 70 does not exist without extending the array; 7/38/39/44/45 are traps. Full evidence and the cross-tree claim table: **`../grimoire-amix/docs/reference/major-number-registry.md`** (Major-Number Registry) — whose convention is "take 51–67 or 69, and respect an existing community claim even a weak one". The narrative note lives in `BUILD.md` §2(b). **48 is vacated — do not reuse it.**
 2. **int2_tbl entry** (pending Q1) — add `z3660ethintr,` before the terminating `0};`, anchored after `aenintr,` (`kernel.c:193`); append `z3660ethintr` to the extern (`kernel.c:187`).
 3. **init_tbl entry** — add `z3660ethinit,` before `0};` (only if using the hydra boot-probe model — see Q-INITMODEL); add to the extern (`kernel.c:38`).
 
@@ -292,7 +294,7 @@ The SCSI path generates `scsicard[]` rows into `alien/sd.c` and never touches `k
 
 Proposed typed stanza:
 ```
-net  z3660eth.c  major=48  streamtab=z3660ethinfo  init=z3660ethinit  intr=z3660ethintr  "Z3660 Ethernet"
+net  z3660eth.c  major=51  streamtab=z3660ethinfo  init=z3660ethinit  intr=z3660ethintr  "Z3660 Ethernet"
 ```
 
 New steps (delta):
@@ -312,11 +314,11 @@ New steps (delta):
 
 ## 7. Userland Bring-up (real HW @ 192.168.2.39)
 
-Assume major **48**, interface **`zen0`**. `slink addaen` is **generic** ("link an Ethernet DLPI driver under IP+ARP", reused verbatim by hydra; `strcf:87-94` links the driver under **both** `/dev/ip` (with `app` pushed) and `/dev/arp`). SVR4.0 has **no `plumb`** and **literal IP only** (never `` `uname -n` `` — the ~90 s DNS-stall trap).
+Major **51** (§6.1), interface **`zen0`**. `slink addaen` is **generic** ("link an Ethernet DLPI driver under IP+ARP", reused verbatim by hydra; `strcf:87-94` links the driver under **both** `/dev/ip` (with `app` pushed) and `/dev/arp`). SVR4.0 has **no `plumb`** and **literal IP only** (never `` `uname -n` `` — the ~90 s DNS-stall trap).
 
 **One-shot (single-user/testing):**
 ```sh
-mknod /dev/zen0 c 48 0
+mknod /dev/zen0 c 51 0
 /usr/sbin/slink                                  # if boot didn't: strcf boot{} (tcp/udp/icmp/rawip + loopback)
 /usr/sbin/slink addaen /dev/zen0 zen0            # links under /dev/ip AND /dev/arp
 /usr/sbin/ifconfig zen0 192.168.2.39 netmask 255.255.255.0 up -trailers
@@ -413,5 +415,5 @@ Two top open questions resolved against real kernel source (hydra-amix `/usr/sys
 
 ### 10.3 Knock-on simplifications
 - **Firmware-change decision UNCHANGED (none needed)** — AMIX-side poll/chain delivers RX.
-- **Phase-1 kernel.c edit = ONE insertion:** cdevsw slot **48** (`&z3660ethinfo`) + its extern, using `aen`'s **LAZY-OPEN** model (no `init_tbl`/`io_init` entry) → gate-safe on the GEM-less WinUAE box. No `int2_tbl`/`int6`/`acia.c` edits until Phase-3 interrupt-driven RX. Free majors confirmed 48,49,51–69 (`kernel.c:398-419`) → **48**.
+- **Phase-1 kernel.c edit = ONE insertion:** cdevsw slot **51** (`&z3660ethinfo`) + its extern, using `aen`'s **LAZY-OPEN** model (no `init_tbl`/`io_init` entry) → gate-safe on the GEM-less WinUAE box. No `int2_tbl`/`int6`/`acia.c` edits until Phase-3 interrupt-driven RX. Empty rows in the stock table confirmed at 48, 49 and 51–69 (`kernel.c:398-419`); the pick is **51**, because 48 and 49 carry community claims that the stock table cannot show — see §6.1.
 - **Build anchors:** anchor kerntools edits on `aen*` (stock: cdevsw:357 `&aeninfo`, int2_tbl:193 `aenintr`); the golden box may lack hydra lines (BLOCKER-1) — still pull live `kernel.c` at gate time, but `aen` anchors are safe.
