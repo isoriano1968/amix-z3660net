@@ -122,11 +122,37 @@ loop (with loop_count cap, e.g. 256):
 
 > **[FIX B2 — protocol] The empty-ring sentinel depends on a firmware serial-stamp hack — document it.** When the consumer catches up, the firmware resets the ring AND stamps the now-current slot-0 with the just-consumed serial so the guest won't re-process it (`ethernet.c:619-629`). So `serial == last_serial` is the *intended* "ring empty" signal — it is **not** an inherently empty slot. Init `last_serial = 0` (safe: the firmware's first `frame_serial++` yields 1, and the guest also inits `old_serial=0`, `device.c:777`). The serial is 16-bit and **wraps**; keep the softc field `ushort`.
 
-### 2.5 IRQ level — **OPEN QUESTION Q1 (the wiring question), firmware half resolved**
+### 2.5 IRQ level — **Q1 RESOLVED (2026-07-27)**
 
 > **[FIX M1 — protocol]** The firmware **unambiguously asserts Amiga INT6** (level-6 autovector): `amiga_interrupt_set(AMIGA_INTERRUPT_ETH)` → `DiscreteSet(REG0, FPGA_INT6)` on the 0→nonzero edge (`interrupt.c:29`); `AMIGA_INTERRUPT_ETH = 1` (`interrupt.h:19`). It is **not configurable to INT2 in this firmware** (the INT2 path is a guest-side `DEVF_INT2MODE` board-mod, `device.c:233-242`).
 
-**The divergence that remains open:** the AMIX `aen`/`hydra` ISRs (and the Z3660 SCSI driver) are wired on **INT2** (`int2_tbl[]`); AMIX has no surveyed `int6_tbl[]`. **OPEN QUESTION Q1:** how does AMIX service a level-6 autovector, and does it have (or need) an INT6 ISR table? This must be resolved against the AMIX trap vectors (`amiga/ml/ttrap.s` and the level-6 vector) before wiring the ISR. The level the firmware asserts (INT6) is fixed; the question is the *AMIX-side* hook. **Source-answerable in Phase 0; real-HW-confirmable.**
+**The divergence:** the AMIX `aen`/`hydra` ISRs (and the Z3660 SCSI driver) are wired on **INT2** (`int2_tbl[]`); AMIX has no surveyed `int6_tbl[]`. **Q1 (was OPEN):** how does AMIX service a level-6 autovector, and does it have (or need) an INT6 ISR table? The level the firmware asserts (INT6) is fixed; the question was the *AMIX-side* hook. Answered against the AMIX trap vectors:
+
+**Q1 RESOLVED (2026-07-27, from the relink kit's stock `amiga/ml` sources).** AMIX *does* service
+the level-6 autovector: `amiga/ml/vec.s:36` wires vector offset `0x78` to `p6int` (levels 1–6 are
+the only non-`nullvect` interrupt entries; level 7 is unhandled). But `p6int` (`ttrap.s:118-134`)
+is **hardwired to CIA-B and nothing else**: it gates on Paula `INTREQR` bit 13 alone
+(`and.w &0x2000` — EXTER; any other cause is treated as spurious), dismisses **only Paula's
+request latch** (`mov.w %d0,0xDFF09C`), calls the single fixed handler `aciabintr`
+(`driver/acia.c:42-58` — a CIA-B ICR read-clear plus floppy-index/CLOCK==2 branches; on the stock
+CLOCK==1 kernel effectively a no-op), and falls into `intret`. **There is no `int6_tbl` and no
+registration API for level 6** — the kernel's only ISR tables are the link-time-fixed `int2_tbl`
+(`master.d/kernel.c:189-195`, walked by `p2int`) and the level-3 `vbinttab` (the only one with a
+runtime API, `addvbint`/`remvbint`). Consequences: (1) the Z3660 FPGA's `/INT6` assertion *does*
+reach this path (it sets EXTER and passes the gate — confirmed by the 2026-06-21 serial-PC
+heartbeat showing the lock inside `p6int`/`aciabintr`/`intret`), but **nothing ever acks the
+board**, and because `/INT6`→EXTER is level-sensitive the request re-latches on every `rte` → an
+unbounded IPL6 storm that starves the level-2 CIA-A clock (all `timeout()` callouts, including
+our own drain) and level-5 serial — the observed hard-lock. (2) Wiring an eth ISR at level 6
+would require patching stock ml (`ttrap.s`) and relinking — kernel-source surgery outside the
+driver-drop model. (3) A level-6 handler would run at IPL6, above the clock and serial — the
+wrong place for per-frame RX work regardless. **Resolution: the shipped design is the correct
+architecture, not a workaround** — `ZZ_CONFIG_DISABLE` so INT6 never fires, plus the bounded
+polled drain (commit `b06cf45`). The §3 contingency stands as the only interrupt-driven path:
+firmware routing eth notification to INT2 (PORTS, gate `0x0008`, `ttrap.s:33`) would be served by
+the existing `p2int` walk via an `int2_tbl[]` entry — a one-line `master.d/kernel.c` edit at
+kernel-build time, since the table is link-time-fixed; note every `int2_tbl` handler is called on
+*every* INT2 with a fake-pcb-pointer argument and must identify and dismiss its own device.
 
 ### 2.6 MAC source
 
