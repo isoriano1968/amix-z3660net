@@ -38,7 +38,7 @@ the empty `/*51*/` row (`…,notty,nostr,nullflag,`) before writing, then replac
 /* was: */ ND,ND,ND,ND,ND,ND,ND,ND,ND,ND,notty,nostr,nullflag,         /*51*/
 /* now: */ ND,ND,ND,ND,ND,ND,ND,ND,ND,ND,notty,&z3660ethinfo,nullflag,  /*51=z3660eth*/
 ```
-> **Why major 51** (renumbered from 48 on 2026-07-27). 51 is the **lowest slot of the
+> **Why major 51** (renumbered from 48 on 2026-07-30). 51 is the **lowest slot of the
 > ecosystem-verified-free set 51–67 and 69**. The original 48 was picked in 2026-06 simply
 > because it was an empty `nostr` row on the stock/a4091 kernel — but it turns out to be
 > **contested**: `zz9000-amix`'s `integration/kernel.c.txt` documents an unpublished
@@ -70,6 +70,42 @@ OBJ = \
 z3660eth/exp :                  # <-- add this rule
         cd z3660eth; $(MAKE)
 ```
+
+## 3b. The two on-box patch scripts — outcomes, and how to test them without a box
+Steps 2 and 3 are what `tools/patch-kernel.sh` and `tools/patch-makefile.sh` do on the box
+(pushed and run by `../amix-kerntools/build-net-kernel.sh` / `build-combined-kernel.sh` /
+`tools/onbox-build.sh`). Both are pre-POSIX-`/bin/sh` + SVR4-`ed` only, both are idempotent,
+and since 2026-07-31 both are **fail-closed**: each edit is a separately guarded arm that is
+**post-verified in the file**, because SVR4 `ed` reports an address-search miss with a bare
+`?`, keeps reading the here-document as commands, writes the file anyway, and exits 0. Read
+the outcome from the exit status, not from the fact that the script ran:
+
+| rc | first line | meaning |
+|----|------------|---------|
+| 0 | `… ALREADY PATCHED` | every arm was already present; nothing was written |
+| 0 | `… PATCHED:` | every arm that was needed landed **and** was verified in the file |
+| 4 | `… REFUSED (<verdict>)` | pre-flight said no — **the file was not touched** |
+| 5 | `… HALF-PATCHED` | an arm did not land; the named arm failed, restore `<file>.bnkorig`, do **not** relink |
+
+`patch-kernel.sh`'s pre-flight is **row-scoped** and shares kerntools `tools/cdevsw-gate.sh`'s
+verdict vocabulary — `FREE`/`OURS` proceed; `MOVED` (our streamtab claims a row that is not
+51 — a tree integrated **before** the 48→51 renumber), `TAKEN`, `MISSING`, `AMBIGUOUS`,
+`NOANCHOR`, `NOKERNELC` refuse. `MOVED` prints the migration steps: vacate the old row back
+to the `nostr` filler, keep the extern, re-run. A name-wide `grep z3660eth` guard used to
+call that state ALREADY PATCHED and leave slot 51 unclaimed while renumbered `/dev/zen0`
+nodes opened 51 — silent no-ethernet.
+
+Both scripts take an optional path argument (default the on-box path), which is what lets
+the whole thing be tested host-side with no box, no emulator and no build:
+```
+bash tools/patch-selftest.sh      # ~20 fixture scenarios, exits non-zero on the first failure
+```
+It runs the battery under every plain shell on the host (`sh`, `dash`), lints both scripts for
+bashisms (`$(…)`, `[[`, `local`, arrays, `printf`, `grep -q/-E`, `sed -i/-E`), drives the
+post-verify with an `ed` shim that deliberately drops an arm, and checks the replacement
+cdevsw row is still the single column-0 line that
+`../amix-kerntools/tools/cdevsw-gate-selftest.sh` lifts out of `patch-kernel.sh`. **That row
+text and its `/*51=z3660eth*/` tag are a cross-repo contract — do not reshape them.**
 
 ## 4. Clean-gate relink (the D245 boot-breaker workaround)
 On-box `ld` corrupts ~70% of kernel links under emulation, so relink until the kernel is
