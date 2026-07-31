@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-07-31 — on-box patch scripts made fail-closed (half-patch audit packet B)
+
+- `tools/patch-kernel.sh`, `tools/patch-makefile.sh` (`603c719`): the name-wide
+  `grep z3660eth` guard is replaced by ROW-SCOPED / SHAPE-SCOPED pre-flight, each edit
+  is its own independently guarded ed invocation, and every arm is POST-VERIFIED in the
+  file — ed's exit status is 0 through all three measured failure modes.
+  Outcomes are now distinguishable: rc 0 `ALREADY PATCHED` / rc 0 `PATCHED:` /
+  rc 4 `REFUSED (<verdict>)` with the file untouched / rc 5 `HALF-PATCHED` naming the
+  failed arm and its `.bnkorig`.  Verdicts share kerntools `cdevsw-gate.sh`'s vocabulary
+  (FREE, OURS, TAKEN, HALF, MISSING, MOVED, + AMBIGUOUS/NOANCHOR/NOKERNELC).
+  Fixes audit F1 (a pre-48→51-renumber tree was reported ALREADY PATCHED, leaving slot 51
+  unclaimed while renumbered `/dev/zen0` nodes opened 51 — silent no-ethernet) and both
+  F5 half-patches (respelled `aeninfo` extern anchor; stripped `# kdb/exp` OBJ anchor
+  leaving the rule-only state the guard then hid forever).  Trees already in either half
+  state are now REPAIRED, not reported as done.  The replacement cdevsw row and its
+  `/*51=z3660eth*/` tag are byte-unchanged (cross-repo drift-guard contract).
+- `tools/patch-selftest.sh` (new, `603c719`): benchless host-side battery — 22 fixture
+  scenarios per shell under `sh` and `dash`, bashism lint, an `ed` shim that drops an arm
+  to exercise the post-verify, and the row-drift check kerntools' gate selftest depends on.
+- `BUILD.md` (`d382108`): new §3b documents the outcome table, the verdicts, the optional
+  path argument and the selftest; renumber date corrected 2026-07-27 → 2026-07-30.
+
 ## 2026-07-30 — cdevsw major renumbered 48 → 51; Q1 (AMIX level-6 servicing) resolved
 
 Renumbered `z3660eth`'s char major **48 → 51** repo-wide (`c949380`, date note corrected
