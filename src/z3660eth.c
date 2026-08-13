@@ -27,8 +27,11 @@
  * interrupt-driven path (int2_tbl via board-mod, or a p6int/int6_tbl change) but
  * is not wired into kernel.c.  TX is synchronous and needs no interrupt.
  *
- * Cache coherency: the eth windows are CACHEABLE on the 030 (under TT0, CI=0) and
- * per-page cache-inhibit is impossible (TT match bypasses the PTE; no PG_CI bit).
+ * Cache coherency: the eth windows are CACHEABLE on the 030 (AMIX section 0 is
+ * mapped with cache-inhibit clear -- see the mapping note above z3660eth_map())
+ * and per-page cache-inhibit is impossible whichever way the board is mapped:
+ * this kernel has no PG_CI bit at all (immu.h:68-75 defines only PG_ADDR/PG_LOCK/
+ * PG_M/PG_REF/PG_W/PG_V), so an sptalloc'd mapping is no less cacheable.
  * Explicit 68030 line-granular cpushl ops are provided behind Z3660ETH_CACHE_FLUSH
  * (default OFF -- matching the proven aen/z3660 no-flush behaviour, which works
  * because the 030 data cache is effectively off; enable + re-soak if the real-HW
@@ -120,6 +123,7 @@ static int z3660eth_autoconfigured;
 /* diagnostics (read via /dev/mem on real HW, like z3660.c) */
 unsigned long z3660eth_board_phys, z3660eth_last_rc, z3660eth_last_off, z3660eth_machi, z3660eth_maclo;
 unsigned char z3660eth_present;
+unsigned char z3660eth_direct_map;	/* 1 = section-0 identity, 0 = sptalloc'd */
 
 #define WRLONG(base,off,val) (*(volatile unsigned long *)((base) + (off)) = (unsigned long)(val))
 #define RDLONG(base,off)     (*(volatile unsigned long *)((base) + (off)))
@@ -152,8 +156,46 @@ int len;
 /* ----------------------------------------------------------------------------
  * Discovery + mapping.  Fills board->z3660eth_info {board_base, regs, frame,
  * txwin, paddress}.  0 on success; ENXIO when no Z3660 is present; ENOMEM on a
- * mapping failure.  Mirrors z3660map() in z3660.c (TT-gap-safe sptalloc, AGA
- * gate) but verifies via the firmware MAC register instead of the SCSI mailbox.
+ * mapping failure.  Same AGA-gated discovery as z3660map() in z3660.c, but it
+ * verifies via the firmware MAC register instead of the SCSI mailbox.
+ *
+ * MAPPING STRATEGY -- why the metal box needs no sptalloc() at all.
+ *
+ * AMIX's supervisor root table has FOUR level-A entries, one per 1 GB section
+ * (tc_on encodes TIA=2; the table is built in ml/exp pstart()).  Entry 0, which
+ * covers VA 0x00000000-0x3FFFFFFF, is a single EARLY-TERMINATION page descriptor
+ * whose page address is 0 -- i.e. a straight identity map of the whole low 1 GB,
+ * RAM or not.  That is why immu.h:348 can define phystokv(p) as (p), and why
+ * every stock Amiga driver simply dereferences the address autocon() gave it
+ * (the custom chips at 0xDFFxxx and the A3000 SCSI at 0xDD0000 are far above
+ * physical RAM and are reached exactly this way -- this driver's own AGA gate
+ * reads VPOSR = 0xDFF004 before it has mapped anything).  Only section 1
+ * (VSECT1 = 0x40000000, the kernel-virtual arena) is page-table-backed, and
+ * section 1 is what sptalloc() hands addresses out of.
+ *
+ * Note this is NOT the 68030 transparent-translation registers: amiga/boot/
+ * copyit.s:87-88 pmoves ZERO into %tt0/%tt1, and ttrap.s:326-329's "tt0_on"
+ * word 0x003F0143 has E=0 -- its own comment says "Disable".  TT is off in AMIX;
+ * the low-1 GB identity map is a page-table early termination.  Same 0x40000000
+ * boundary, different mechanism.
+ *
+ * So when the board sits below VSECT1 -- the shipped Z3660 config, autoconfig_rtg
+ * NO, fixed base 0x10000000 with the frame windows at 0x17ED0000/0x17EE0000 --
+ * its physical address ALREADY IS a valid supervisor VA and no mapping call is
+ * needed.  Taking that path is not cosmetic: sptalloc() draws from sptmap, a
+ * HARDCODED 2048-page (4 MB) resource map that page[] -- sized by presented RAM
+ * -- is carved out of first.  Past ~83 MB of RAM no 64-page contiguous run was
+ * left, the frame sptalloc() returned 0, and this function reported ENOMEM,
+ * printing "no Z3660 ethernet found" for a board that was perfectly visible and
+ * whose SCSI half was at that moment serving the root filesystem.  Mapping
+ * directly removes zen0 from that allocation budget entirely.
+ *
+ * sptalloc() is kept for a board at or above VSECT1 -- autoconfig_rtg YES puts
+ * the combo window at 0x40000000, inside the page-table-backed section, exactly
+ * the case a4091.c:152-153 handles.  The direct path is chosen only when the
+ * ENTIRE span the driver touches (base .. base+ZZ_WINDOW_TOP) stays below
+ * VSECT1, so a board based just under the boundary still takes the safe path.
+ * Cache semantics are identical either way (see the file header).
  * ------------------------------------------------------------------------- */
 static int
 z3660eth_map(board_index)
@@ -162,7 +204,7 @@ int board_index;
     z3660eth_board_t *board = &z3660eth_board[board_index];
     z3660eth_info_t *info = &board->z3660eth_info;
     long base, size;
-    unsigned long hi, lo;
+    unsigned long hi, lo, bp;
 
     if (info->regs)
 	return 0;
@@ -180,14 +222,28 @@ int board_index;
     }
 
     info->board_base = base;
-    z3660eth_board_phys = (unsigned long)base;
+    bp = (unsigned long)base;
+    z3660eth_board_phys = bp;
 
-    info->regs = (volatile unsigned char *)sptalloc(ZZ_REGS_PAGES, PG_V,
-		    phystopfn((paddr_t)base), 0);
-    info->frame = (volatile unsigned char *)sptalloc(ZZ_FRAME_PAGES, PG_V,
-		    phystopfn((paddr_t)base + ZZ_RXBACKLOG_OFF), 0);
+    /*
+     * Whole window inside the identity-mapped section 0?  Then the physical
+     * address is the kernel VA.  The subtraction cannot wrap: bp < VSECT1.
+     */
+    if (bp < (unsigned long)VSECT1 &&
+	((unsigned long)VSECT1 - bp) >= (unsigned long)ZZ_WINDOW_TOP) {
+	z3660eth_direct_map = 1;
+	info->regs  = (volatile unsigned char *)phystokv((paddr_t)base);
+	info->frame = (volatile unsigned char *)
+			phystokv((paddr_t)base + ZZ_RXBACKLOG_OFF);
+    } else {
+	z3660eth_direct_map = 0;
+	info->regs = (volatile unsigned char *)sptalloc(ZZ_REGS_PAGES, PG_V,
+			phystopfn((paddr_t)base), 0);
+	info->frame = (volatile unsigned char *)sptalloc(ZZ_FRAME_PAGES, PG_V,
+			phystopfn((paddr_t)base + ZZ_RXBACKLOG_OFF), 0);
+    }
     if (info->regs == 0 || info->frame == 0) {
-	info->regs = 0;
+	info->regs = 0;			/* sptalloc failure, or a base of 0 */
 	return ENOMEM;
     }
     info->txwin = info->frame + ZZ_TXWIN_OFF;

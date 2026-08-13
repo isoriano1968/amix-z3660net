@@ -44,15 +44,20 @@
 #define ZZ_RX_MAX_SLOTS	 64		/* firmware FRAME_MAX_BACKLOG (overrun range) */
 
 /*
- * sptalloc page counts (Amix NBPP = 2048, NOT 4096 -- see z3660.c).
+ * Window extents (Amix NBPP = 2048, NOT 4096 -- see z3660.c).  These are page
+ * counts for the sptalloc() path and plain byte spans for the direct path; see
+ * the mapping-strategy comment above z3660eth_map() in z3660eth.c.
  *   regs page : 1 page at board_base+0 covers 0x000..0x7FF (regs 0x104..0x1A8)
- *   frame rgn : map board_base+0x07ED0000 for the full 64-slot overrun range
- *               (128 KB = 64 pages) so any ZZ_ETH_RX_ADDR value is mapped;
+ *   frame rgn : board_base+0x07ED0000 for the full 64-slot overrun range
+ *               (128 KB = 64 pages) so any ZZ_ETH_RX_ADDR value is reachable;
  *               txwin = frame_region + (0x07EE0000-0x07ED0000) = +0x10000.
  */
 #define ZZ_REGS_PAGES	1
 #define ZZ_FRAME_PAGES	64			/* 64 * 2048 = 128 KB */
+#define ZZ_FRAME_SPAN	(ZZ_FRAME_PAGES * ZZ_FRAME_SIZE)	/* 0x20000 bytes */
 #define ZZ_TXWIN_OFF	(ZZ_TXFRAME_OFF - ZZ_RXBACKLOG_OFF)	/* 0x10000 */
+/* highest board-relative byte the driver ever touches (+1) */
+#define ZZ_WINDOW_TOP	(ZZ_RXBACKLOG_OFF + ZZ_FRAME_SPAN)	/* 0x07EF0000 */
 
 /* ---- ethernet framing (mirrors aen.h / hydra.h) ---- */
 #define ETH_ADDRESS_SIZE	6
