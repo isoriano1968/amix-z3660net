@@ -1,3 +1,10 @@
+## 2026-08-13 — z3660eth: direct board mapping below VSECT1 (b89c5d2)
+
+z3660eth_map() takes the physical base as the kernel VA when the whole span stays
+under 0x40000000 (section-0 early-termination identity map — AMIX does NOT use the
+68030 TT registers; ETHERNET-SCOPING §10.1); sptalloc kept only for a board at/above
+VSECT1 (autoconfig_rtg). The metal 0x10000000 case now draws 0 sptmap pages (was 65).
+Metal-proven: flew in the Route-A v3/v4 kernels at 88 MB with zen0 up.
 # Changelog
 
 ## 2026-07-31 — on-box patch scripts made fail-closed (half-patch audit packet B)
