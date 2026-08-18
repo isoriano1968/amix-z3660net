@@ -1,3 +1,21 @@
+# Changelog
+
+## 2026-08-18 — z3660eth: page-size-agnostic window geometry (ded6ef4)
+
+The frame-window math is now bytes-primary: ZZ_FRAME_BYTES (0x20000) and
+ZZ_REGS_BYTES (0x1AC = register file 0x104..0x1A8 read as longs) are the
+constants; ZZ_FRAME_SPAN/ZZ_WINDOW_TOP come straight from ZZ_FRAME_BYTES and
+ZZ_FRAME_PAGES/ZZ_REGS_PAGES round UP from bytes over NBPP (sptalloc sizing on
+the non-direct-map path only). ZZ_FRAME_SIZE stays 2048 — that is the firmware
+per-slot PROTOCOL STRIDE, not a page size, and only coincidentally equals NBPP
+on this kernel. The old page-count-first shape put ZZ_WINDOW_TOP — the b89c5d2
+direct-map admission bound — one rework away from landing on exactly
+ZZ_TXFRAME_OFF on a 4096-byte-page kernel, i.e. no longer covering the TX
+staging frame. Five #if/#error assertions now fail the build if the shape is
+reversed. Cross-toolchain evidence: 64/0x20000/0x07EF0000 at NBPP=2048 and
+32/0x20000/0x07EF0000 at NBPP=4096; z3660eth.o and ld -r exp byte-identical
+to the pre-change build (no behavioural change on the shipping kernel).
+
 ## 2026-08-13 — z3660eth: direct board mapping below VSECT1 (b89c5d2)
 
 z3660eth_map() takes the physical base as the kernel VA when the whole span stays
@@ -5,8 +23,6 @@ under 0x40000000 (section-0 early-termination identity map — AMIX does NOT use
 68030 TT registers; ETHERNET-SCOPING §10.1); sptalloc kept only for a board at/above
 VSECT1 (autoconfig_rtg). The metal 0x10000000 case now draws 0 sptmap pages (was 65).
 Metal-proven: flew in the Route-A v3/v4 kernels at 88 MB with zen0 up.
-# Changelog
-
 ## 2026-07-31 — on-box patch scripts made fail-closed (half-patch audit packet B)
 
 - `tools/patch-kernel.sh`, `tools/patch-makefile.sh` (`603c719`): the name-wide
