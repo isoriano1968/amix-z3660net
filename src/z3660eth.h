@@ -8,6 +8,7 @@
  * ethernet.c + memorymap.h + rtg/rtg.c).  See ETHERNET-SCOPING.md.
  */
 
+#include "sys/immu.h"		/* NBPP: the page size the window page counts round up to */
 #include "z3660ethuser.h"
 
 /* ---- board identity / discovery (same combo board as the z3660.c SCSI) ---- */
@@ -44,20 +45,69 @@
 #define ZZ_RX_MAX_SLOTS	 64		/* firmware FRAME_MAX_BACKLOG (overrun range) */
 
 /*
- * Window extents (Amix NBPP = 2048, NOT 4096 -- see z3660.c).  These are page
- * counts for the sptalloc() path and plain byte spans for the direct path; see
- * the mapping-strategy comment above z3660eth_map() in z3660eth.c.
- *   regs page : 1 page at board_base+0 covers 0x000..0x7FF (regs 0x104..0x1A8)
- *   frame rgn : board_base+0x07ED0000 for the full 64-slot overrun range
- *               (128 KB = 64 pages) so any ZZ_ETH_RX_ADDR value is reachable;
- *               txwin = frame_region + (0x07EE0000-0x07ED0000) = +0x10000.
+ * Window extents.  BYTES ARE PRIMARY HERE; PAGE COUNTS ARE DERIVED.
+ *
+ * ZZ_FRAME_SIZE (2048) above is the firmware's per-slot PROTOCOL STRIDE.  It is
+ * not a page size -- it only happens to equal the kernel page size on the kernel
+ * this driver ships against (immu.h: NBPP 2048).  The board window geometry is a
+ * property of the firmware, so it is stated in bytes and stays fixed no matter
+ * what NBPP is; the page counts, which exist only to size the sptalloc() calls
+ * on the non-direct-map path, are rounded up from those bytes for whatever NBPP
+ * the kernel is built with.
+ *
+ * Getting that dependency backwards is a real hazard, not a style point.  Take
+ * the window span from a page COUNT -- "64 pages" -- and on a 4096-byte-page
+ * kernel the span becomes 256 KB; make the count follow the page size instead
+ * ("128 KB worth of pages" spelled as a halved count) and the span silently
+ * becomes 64 KB, which drops ZZ_WINDOW_TOP from 0x07EF0000 to exactly
+ * ZZ_TXFRAME_OFF.  ZZ_WINDOW_TOP is the direct-map admission bound in
+ * z3660eth_map(): at that value the guard would admit a board whose TX staging
+ * frame lies past the identity-mapped section, i.e. it would stop covering the
+ * very window it exists to check.  Hence ZZ_FRAME_SPAN/ZZ_WINDOW_TOP come from
+ * ZZ_FRAME_BYTES directly and never from a page count, and the assertions below
+ * fail the build if that is ever reversed.
+ *
+ *   regs  : ZZ_REGS_BYTES at board_base+0 -- the register file 0x104..0x1A8,
+ *           read as 32-bit longs, so 0x1AC bytes; rounds up to one page on any
+ *           sane NBPP (it was a hardcoded 1 page, correct only for NBPP >= 0x1AC).
+ *   frame : ZZ_FRAME_BYTES at board_base+0x07ED0000 -- the full 64-slot overrun
+ *           range (0x20000 = ZZ_RX_MAX_SLOTS * ZZ_FRAME_SIZE) so that every
+ *           ZZ_ETH_RX_ADDR the firmware can produce lands inside the mapping;
+ *           txwin = frame_region + (0x07EE0000-0x07ED0000) = +0x10000.
+ *
+ * The direct-map path uses the byte spans; only sptalloc() uses the page counts.
+ * See the mapping-strategy comment above z3660eth_map() in z3660eth.c.
  */
-#define ZZ_REGS_PAGES	1
-#define ZZ_FRAME_PAGES	64			/* 64 * 2048 = 128 KB */
-#define ZZ_FRAME_SPAN	(ZZ_FRAME_PAGES * ZZ_FRAME_SIZE)	/* 0x20000 bytes */
+#define ZZ_REGS_BYTES	(ZZ_INT_STATUS + 4)	/* highest register + one long */
+#define ZZ_FRAME_BYTES	0x20000			/* firmware frame window, in bytes */
+#define ZZ_REGS_PAGES	((ZZ_REGS_BYTES + NBPP - 1) / NBPP)	/* 1 @ NBPP 2048 */
+#define ZZ_FRAME_PAGES	((ZZ_FRAME_BYTES + NBPP - 1) / NBPP)	/* 64 @ NBPP 2048 */
+#define ZZ_FRAME_SPAN	ZZ_FRAME_BYTES		/* NEVER from a page count */
 #define ZZ_TXWIN_OFF	(ZZ_TXFRAME_OFF - ZZ_RXBACKLOG_OFF)	/* 0x10000 */
 /* highest board-relative byte the driver ever touches (+1) */
-#define ZZ_WINDOW_TOP	(ZZ_RXBACKLOG_OFF + ZZ_FRAME_SPAN)	/* 0x07EF0000 */
+#define ZZ_WINDOW_TOP	(ZZ_RXBACKLOG_OFF + ZZ_FRAME_BYTES)	/* 0x07EF0000 */
+
+/*
+ * Compile-time guards on the above.  These are plain preprocessor conditionals:
+ * when an assertion holds, its #error sits in a SKIPPED group, and a skipped
+ * group is scanned only for conditional-directive nesting -- so a preprocessor
+ * that does not implement #error at all still compiles this header unharmed.
+ */
+#ifndef NBPP
+#error "z3660eth.h: NBPP undefined -- <sys/immu.h> must be included first"
+#endif
+#if (ZZ_FRAME_PAGES * NBPP) < ZZ_FRAME_BYTES
+#error "ZZ_FRAME_PAGES does not cover ZZ_FRAME_BYTES -- page round-up is broken"
+#endif
+#if (ZZ_REGS_PAGES * NBPP) < ZZ_REGS_BYTES
+#error "ZZ_REGS_PAGES does not cover ZZ_REGS_BYTES -- page round-up is broken"
+#endif
+#if ZZ_WINDOW_TOP != (ZZ_RXBACKLOG_OFF + ZZ_FRAME_BYTES)
+#error "ZZ_WINDOW_TOP must be ZZ_RXBACKLOG_OFF + ZZ_FRAME_BYTES, never a page count"
+#endif
+#if ZZ_FRAME_BYTES < (ZZ_RX_MAX_SLOTS * ZZ_FRAME_SIZE)
+#error "ZZ_FRAME_BYTES must cover the whole ZZ_RX_MAX_SLOTS overrun range"
+#endif
 
 /* ---- ethernet framing (mirrors aen.h / hydra.h) ---- */
 #define ETH_ADDRESS_SIZE	6
