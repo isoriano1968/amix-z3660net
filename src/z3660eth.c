@@ -40,10 +40,12 @@
  * sptalloc arm would take hat_cm_ram and be unusable.  The two mapping arms are
  * therefore NOT cache-equivalent there.  See docs/BLIZZARD-F3.md.
  *
- * Explicit 68030 line-granular cpushl ops are provided behind Z3660ETH_CACHE_FLUSH
- * (default OFF -- matching the proven aen/z3660 no-flush behaviour, which works
- * because the 030 data cache is effectively off; enable + re-soak if the real-HW
- * coherency campaign shows torn frames).  See ETHERNET-SCOPING.md sections 5/10.
+ * Line-granular 040/060 maintenance and the attach-time free-ride assert live
+ * below, gated by z3660eth_cache (0 = off, the shipping default; 40/60 poked
+ * through /dev/kmem).  On the 030 line nothing of it is reachable, which is the
+ * proven aen/z3660 no-flush behaviour, correct there because the 030 data cache
+ * is effectively off in every validated config.
+ * See docs/BLIZZARD-F3.md and ETHERNET-SCOPING.md sections 5/10.
  *
  * Detection mirrors z3660.c exactly: autocon(0x144B0001) first; on a miss, and
  * only on AGA (VPOSR>=0x22, so the ECS build box never touches it), probe the
@@ -330,29 +332,130 @@ int board_index;
 }
 
 /* ----------------------------------------------------------------------------
- * 68030 data-cache maintenance for the shared eth DDR windows.  Line-granular
- * cpushl (push dirty + invalidate) over [addr,addr+len); cache line = 16 bytes.
- * Default OFF (see file header).  When enabled, verify the Amix `as` accepts the
- * cpushl syntax at build time.
+ * BLIZZARD F3-M2 -- 68040/68060 data-cache maintenance for the shared eth DDR
+ * windows.  Replaces a block that was #ifdef'd behind a -D nobody passed and was
+ * wrong four ways when read (docs/BLIZZARD-F3.md 3).  No #ifdef now: compiled in
+ * always, gated at run time -- a -D nobody passes is not a switch, it is a way
+ * to keep code from ever being reviewed.
+ *
+ * Line ops as raw .word so the -m68020 assembler accepts them, with the address
+ * pinned in %a0 by an explicit register variable.  Encodings measured against
+ * this toolchain in both directions (as -m68040 -> word, objdump -> mnemonic):
+ *   f468 = cpushl dc,%a0@	f448 = cinvl dc,%a0@	4e71 = nop
+ *
+ * PUSH AND INVAL ARE NOT THE SAME OPERATION.  They used to be: both expanded to
+ * cpushl.  In general that writes stale CPU bytes back over fresh device bytes;
+ * in THIS driver it cannot, because the RX ring is device-write-only.  What it
+ * does do here is worse for being quiet: on the 68060, CPUSHL's invalidation is
+ * conditional on CACR.DPI -- clear pushes and invalidates, SET pushes and leaves
+ * the line VALID -- so with DPI set a push-as-invalidate does not invalidate at
+ * all, the next drain re-reads the same line, and the driver re-delivers a stale
+ * frame or misses a serial.  Hence two ops, and every push is followed by an
+ * explicit CINVL (harmless on the 040) so one sequence is right on both parts
+ * with no CPU-class branch.  CACR is captured at attach so a set DPI is visible
+ * rather than inferred.
+ *
+ * PUSH BEFORE THE CPU WRITES, NEVER INVALIDATE AFTER.  CINVL DISCARDS a dirty
+ * line without writing it back, and these ranges round outward to 16-byte lines
+ * covering bytes the driver never touched.  The rounding is safe here for a
+ * reason derived per window, not inherited: the RX ring is written only by the
+ * firmware, so no line covering it can be dirty and an invalidate can discard
+ * nothing; the TX window is written only by the CPU, so it takes a PUSH, which
+ * writes those neighbours back before invalidating them.  BOTH HALVES OF THAT
+ * ARGUMENT DIE if a future zero-copy RX ever writes into a slot.
  * ------------------------------------------------------------------------- */
-#ifdef Z3660ETH_CACHE_FLUSH
-static void
-z3660eth_dcache(addr, len)
-volatile unsigned char *addr;
-int len;
-{
-    register unsigned char *p = (unsigned char *)((long)addr & ~15L);
-    register unsigned char *end = (unsigned char *)((long)addr + len);
+unsigned long z3660eth_push_n, z3660eth_inv_n;		/* line-op invocations   */
+unsigned long z3660eth_push_bytes, z3660eth_inv_bytes;	/* bytes, pre-rounding   */
+unsigned long z3660eth_sync_n;				/* barriers executed     */
+unsigned long z3660eth_range_ovf;			/* impossible range refused */
 
-    for (; p < end; p += 16)
-	asm volatile ("cpushl %%dc,(%0)" : : "a"(p));
+#define Z3660ETH_CPUSHL(p) __asm__ __volatile__(".word 0xf468" : : "a" (p) : "memory")
+#define Z3660ETH_CINVL(p)  __asm__ __volatile__(".word 0xf448" : : "a" (p) : "memory")
+#define Z3660ETH_NOP()	   __asm__ __volatile__(".word 0x4e71" : : : "memory")
+#define Z3660ETH_LINEPTR   register unsigned char *p __asm__("a0")
+
+/*
+ * Push-and-invalidate every line covering [va, va+len).  `va' is a kernel VA
+ * that has been PROVEN equal to the physical address (z3660eth_ci_check), which
+ * is what the line ops select by; z3660eth_maint_on is 0 whenever that proof is
+ * unavailable, so nothing here ever fires at an address it did not verify.
+ */
+static void
+z3660eth_push(va, len)
+unsigned long va, len;
+{
+    Z3660ETH_LINEPTR;
+    unsigned long end;
+
+    if (z3660eth_cache == 0 || z3660eth_maint_on == 0 || len == 0)
+	return;
+    if (va + len < va) {			/* wrap: refuse rather than loop wild */
+	z3660eth_range_ovf++;
+	return;
+    }
+    p = (unsigned char *)(va & ~15L);
+    end = (va + len + 15) & ~15L;
+    while ((unsigned long)p < end) {
+	Z3660ETH_CPUSHL(p);
+	Z3660ETH_CINVL(p);
+	p += 16;
+    }
+    z3660eth_push_n++;
+    z3660eth_push_bytes += len;
 }
-#define Z3660ETH_PUSH(a,l)	z3660eth_dcache((volatile unsigned char *)(a), (int)(l))
-#define Z3660ETH_INVAL(a,l)	z3660eth_dcache((volatile unsigned char *)(a), (int)(l))
-#else
-#define Z3660ETH_PUSH(a,l)
-#define Z3660ETH_INVAL(a,l)
-#endif
+
+/*
+ * Invalidate every line covering [va, va+len) -- RX ring only, where nothing the
+ * CPU wrote can live (see the block comment above).
+ */
+static void
+z3660eth_inval(va, len)
+unsigned long va, len;
+{
+    Z3660ETH_LINEPTR;
+    unsigned long end;
+
+    if (z3660eth_cache == 0 || z3660eth_maint_on == 0 || len == 0)
+	return;
+    if (va + len < va) {
+	z3660eth_range_ovf++;
+	return;
+    }
+    p = (unsigned char *)(va & ~15L);
+    end = (va + len + 15) & ~15L;
+    while ((unsigned long)p < end) {
+	Z3660ETH_CINVL(p);
+	p += 16;
+    }
+    z3660eth_inv_n++;
+    z3660eth_inv_bytes += len;
+}
+
+/*
+ * The store/load ordering barrier.  DTT0 is CM=11, cache-inhibited NONSERIALIZED,
+ * so a doorbell write and the load that follows it are ordered only because the
+ * 68060 store buffer is currently OFF (CACR bit 29; the port lane lists turning
+ * it on as candidate 1).  The pair that matters is a LOAD passing a buffered
+ * STORE to the same register: on TX that returns the PREVIOUS frame's result and
+ * mis-scores this one; on RX it returns the pre-strobe cursor and ends the drain
+ * a tick early.  Placed now, gated, so it is in the code before the knob arms the
+ * hazard -- it costs nothing today.
+ *
+ * NOT gated on z3660eth_maint_on: it takes no address, so the identity proof the
+ * line ops need does not apply to it.
+ *
+ * THAT `nop' SERIALIZES PENDING WRITES ON THE 68060 IS ASSUMED, NOT MEASURED --
+ * owed a read of the MC68060UM before the store-buffer rung, on the discipline
+ * that made the port lane settle PCR bit 1 from the manual before any PCR code.
+ */
+static void
+z3660eth_sync()
+{
+    if (z3660eth_cache == 0)
+	return;
+    Z3660ETH_NOP();
+    z3660eth_sync_n++;
+}
 
 /* ----------------------------------------------------------------------------
  * Discovery + mapping.  Fills board->z3660eth_info {board_base, regs, frame,
@@ -457,7 +560,7 @@ int board_index;
      * cache line cannot be mistaken for a firmware answer.  A no-op with
      * z3660eth_cache == 0, which is every shipping image.
      */
-    if (e = z3660eth_ci_check(board_index)) {
+    if ((e = z3660eth_ci_check(board_index)) != 0) {
 	info->regs = 0;
 	return e;
     }
@@ -759,10 +862,19 @@ mblk_t *mp;
     }
 
     bcopy((caddr_t)tmp, (caddr_t)info->txwin, pktsize);
-    Z3660ETH_PUSH(info->txwin, pktsize);
+    /*
+     * Push the frame out of the data cache before the trigger, so the ARM reads
+     * current bytes.  tmp[] itself is NOT maintained: kernel BSS with exactly one
+     * alias, written and read by the CPU only, so it is self-coherent under any
+     * cache mode -- maintaining it would only drag its BSS neighbours into a
+     * rounded range.  (docs/BLIZZARD-F3.md 5.1)
+     */
+    z3660eth_push((unsigned long)info->txwin, (unsigned long)pktsize);
+    z3660eth_sync();
 
     /* trigger: synchronous, ~1ms -- NOT at raised spl */
     WRLONG(info->regs, ZZ_ETH_TX, pktsize);
+    z3660eth_sync();		/* the result load must not pass the trigger store */
     rc = RDLONG(info->regs, ZZ_ETH_TX);
     z3660eth_last_rc = rc;
 
@@ -816,7 +928,16 @@ int board_index;
 	}
 	slot = info->frame + (off - ZZ_RXBACKLOG_OFF);
 
-	Z3660ETH_INVAL(slot, ZZ_RX_FRAME_PAD);
+	/*
+	 * Invalidate the header line before reading it, every iteration.  The
+	 * firmware publishes the serial LAST (ethernet.c: memcpy payload, then
+	 * len at +0..1, then serial at +2..3) and rewrites it again at strobe
+	 * time when the backlog wraps -- so the header may never be read from a
+	 * line that survived a strobe.  `slot' needs no barrier against the
+	 * cursor read above: it is COMPUTED from it, so the address does not
+	 * exist until that load has returned.
+	 */
+	z3660eth_inval((unsigned long)slot, (unsigned long)ZZ_RX_FRAME_PAD);
 	serial = (slot[2] << 8) | slot[3];
 	if (serial == info->last_serial)
 	    break;			/* ring drained */
@@ -831,14 +952,23 @@ int board_index;
 	    board->ifstats.ifs_ierrors++;
 	    info->last_serial = serial;
 	    WRLONG(info->regs, ZZ_ETH_RX, 1);
-	    continue;
+	    z3660eth_sync();
+	    continue;				/* payload never read: no invalidate */
 	}
 
-	Z3660ETH_INVAL(slot + ZZ_RX_FRAME_PAD, len);
+	/*
+	 * Only now, AFTER the serial has certified the payload, invalidate it.
+	 * The outward 16-byte rounding covers the header line (already consumed)
+	 * and the slot's unused tail -- both device-written, never CPU-written,
+	 * so the invalidate can discard nothing.  rxbuff[] and the mblk it feeds
+	 * are NOT maintained: single alias, CPU only, never seen by the device.
+	 */
+	z3660eth_inval((unsigned long)(slot + ZZ_RX_FRAME_PAD), (unsigned long)len);
 	bcopy((caddr_t)(slot + ZZ_RX_FRAME_PAD), (caddr_t)rxbuff, len);
 
 	info->last_serial = serial;
 	WRLONG(info->regs, ZZ_ETH_RX, 1);	/* advance/free the slot */
+	z3660eth_sync();		/* next cursor read must not pass the strobe */
 
 	board->z3660eth_status.packets_received++;
 	board->ifstats.ifs_ipackets++;
