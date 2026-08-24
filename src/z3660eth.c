@@ -27,11 +27,19 @@
  * interrupt-driven path (int2_tbl via board-mod, or a p6int/int6_tbl change) but
  * is not wired into kernel.c.  TX is synchronous and needs no interrupt.
  *
- * Cache coherency: the eth windows are CACHEABLE on the 030 (AMIX section 0 is
+ * Cache coherency, 030 line: the eth windows are CACHEABLE (AMIX section 0 is
  * mapped with cache-inhibit clear -- see the mapping note above z3660eth_map())
  * and per-page cache-inhibit is impossible whichever way the board is mapped:
- * this kernel has no PG_CI bit at all (immu.h:68-75 defines only PG_ADDR/PG_LOCK/
+ * THIS kernel has no PG_CI bit at all (immu.h:68-75 defines only PG_ADDR/PG_LOCK/
  * PG_M/PG_REF/PG_W/PG_V), so an sptalloc'd mapping is no less cacheable.
+ *
+ * That is an 030 fact and it does NOT generalise.  The 040/060 kernel writes a
+ * two-bit CM field in its leaf PTEs (bits 6-5, hat_cm_ram -- copyback since
+ * 2026-07-30), and on that line DTT0 = 0x003fc060 makes the whole low 1 GB --
+ * every window the direct-map arm touches -- cache-INHIBITED for free, while the
+ * sptalloc arm would take hat_cm_ram and be unusable.  The two mapping arms are
+ * therefore NOT cache-equivalent there.  See docs/BLIZZARD-F3.md.
+ *
  * Explicit 68030 line-granular cpushl ops are provided behind Z3660ETH_CACHE_FLUSH
  * (default OFF -- matching the proven aen/z3660 no-flush behaviour, which works
  * because the 030 data cache is effectively off; enable + re-soak if the real-HW
@@ -195,7 +203,9 @@ int len;
  * the case a4091.c:152-153 handles.  The direct path is chosen only when the
  * ENTIRE span the driver touches (base .. base+ZZ_WINDOW_TOP) stays below
  * VSECT1, so a board based just under the boundary still takes the safe path.
- * Cache semantics are identical either way (see the file header).
+ * Cache semantics are identical either way ON THE 030 LINE ONLY -- on the
+ * 040/060 line the arms differ and only the direct one is supported (file
+ * header; docs/BLIZZARD-F3.md).
  * ------------------------------------------------------------------------- */
 static int
 z3660eth_map(board_index)
