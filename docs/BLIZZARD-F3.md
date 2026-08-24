@@ -10,6 +10,19 @@ Confidence tags follow the campaign convention: **measured** (a line of source r
 off a run, with its file), **derived** (arithmetic or logic over measured facts, shown), and
 **assumed** (neither — each one below names the gate that settles it).
 
+> **ROUND-2 RESULT (2026-08-24, appended — nothing above was edited to match it).**
+> M0 and M2 implemented and landed. Cross-compiled with the real AMIX toolchain (gcc 2.7.2.3 /
+> GNU as 2.8.1, the shipped `AMIX_KERNEL_CFLAGS`): **`nm -u` is byte-for-byte identical to the
+> pre-change baseline** — the diagnostics use `cmn_err`, which this driver already referenced, so
+> nothing new is undefined and the repo's oldest gate does not move. All **six** 040/060
+> instruction sites (`movec` ×3, `cpushl`+`cinvl`, `cinvl`, `nop`) are proven dominated by a
+> `tstl z3660eth_cache` / `beq` in the disassembly, the three `movec` leaves being reached by
+> exactly three PC-relative `jsr`s, all inside the gated arm of `z3660eth_ci_check`. The
+> comment-only correction commit is proven **byte-identical** at the object level (`z3660eth.o`
+> and `ld -r exp`, sha256 `736afcc2…`). `-Wall` output is unchanged from baseline. **This repo
+> has no host harness**, so those object-level proofs are what stands in its place (§6).
+> **Nothing here is evidence about a real cache** — §7 is still owed, on metal.
+
 ---
 
 ## 0. Why this driver has never issued a cache instruction
