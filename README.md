@@ -37,8 +37,12 @@ Amiga INT6 on every received frame, but AMIX has no level-6 ethernet handler, so
 the LAN's ARP broadcasts storm the box into a hard lock. Fix = the driver writes
 `ZZ_CONFIG_DISABLE` so the firmware never raises INT6; RX is serviced by the bounded
 poll/drain callout instead (commit `b06cf45`). No firmware change was needed, and
-the optional `Z3660ETH_CACHE_FLUSH` was **not** required (the 030 data cache is
-transparent to the eth DDR windows here — left OFF).
+no cache maintenance was required either (the 030 data cache is transparent to the
+eth DDR windows here). The `Z3660ETH_CACHE_FLUSH` `#ifdef` that once held that
+maintenance is gone: 040/060 maintenance and an attach-time cache-inhibit assert
+are now compiled in always and gated at run time by `z3660eth_cache`, whose
+default 0 keeps every 040/060 opcode unreachable on the shipping images — see
+`docs/BLIZZARD-F3.md`.
 
 Auto-bring-up at boot = `userland/S99zen` (→ `/etc/rc2.d/S99zen`). Note: the
 bring-up can race the inet base streams on a fast clean boot — S99zen runs a bare
