@@ -137,6 +137,199 @@ unsigned char z3660eth_direct_map;	/* 1 = section-0 identity, 0 = sptalloc'd */
 #define RDLONG(base,off)     (*(volatile unsigned long *)((base) + (off)))
 
 /* ----------------------------------------------------------------------------
+ * BLIZZARD F3-M0 -- the 040/060 gate, and the free ride asserted instead of
+ * silently depended on.  Full argument in docs/BLIZZARD-F3.md.
+ *
+ * THE GATE.  This file is compiled ONCE, with -m68020, and the one object is
+ * linked into kernels that run on an emulated 030, an emulated 040 and (from
+ * BLIZZARD F4) a real 68060.  There is no compile-time discriminator, and
+ * `cputype' may NOT be referenced -- the stock kernel has no such symbol, so an
+ * extern to it would break the nm -u clean gate on the 030 line.  So the class
+ * is a driver-owned global, default OFF, poked through /dev/kmem exactly like
+ * the port lane's hg_on / i40_on / hat_cm_ram.  With it 0 no 040/060 opcode in
+ * this file is reachable, which is every shipping image today.
+ *
+ * THE FREE RIDE.  On the 040/060 line pstart040.s loads DTT0 = 0x003fc060: the
+ * whole low 1 GB is cache-inhibited for DATA, so on the direct-map arm every
+ * window this driver touches is CI without the driver knowing it.  That is a
+ * kernel constant no code here names, and the port lane has a written plan to
+ * narrow it (DTT0-NARROWING-SPEC.md stage N1 keeps only the low 16 MiB, which
+ * is far below this board's 0x10000000).  Check it at attach and say so out
+ * loud when it stops being true, rather than discovering it as torn frames.
+ *
+ * THE SAME REGISTER ALSO GIVES US THE ADDRESSES.  CPUSHL/CINVL select a line by
+ * PHYSICAL address and this driver holds kernel VAs; a TTR match is what makes
+ * a logical address a physical one here.  So the line ops are armed only when
+ * ALL FOUR hold: the gate is on, the direct-map arm was taken, phystokv() is
+ * really the identity over both mapped regions, and a TTR covers both of them
+ * cache-inhibited.  On the sptalloc arm the VA has no relation to the board's
+ * physical address, and a CINVL on it would discard an unrelated dirty line
+ * belonging to some other subsystem -- a fix that destroys data is worse than
+ * no fix, so maintenance DISARMS there rather than guessing.
+ * ------------------------------------------------------------------------- */
+long z3660eth_cache;		/* 0 = off (default), 40 = 68040 DC, 60 = 68060 DC */
+long z3660eth_ci_enforce;	/* 0 = warn on a failed free-ride check, else refuse */
+
+/* attach-time capture + verdict, all kmem-readable (docs/BLIZZARD-F3.md 7) */
+unsigned long z3660eth_dtt0, z3660eth_dtt1, z3660eth_cacr;
+unsigned long z3660eth_ci_ok;		/* 0 = not checked, 1 = verified, 2 = FAILED */
+unsigned long z3660eth_maint_on;	/* 1 = the four conjuncts hold; line ops armed */
+unsigned long z3660eth_sptalloc_unsafe;	/* sptalloc arm taken with a live data cache */
+
+/*
+ * 040/060 control-register reads, as raw .word so the -m68020 assembler accepts
+ * them, with the destination pinned by an explicit register variable.  Verified
+ * against this toolchain (gcc 2.7.2.3 / GNU as 2.8.1) by assembling the mnemonic
+ * and disassembling the word, both directions:
+ *   4e7a 0006 = movec %dtt0,%d0   4e7a 0007 = movec %dtt1,%d0
+ *   4e7a 0002 = movec %cacr,%d0
+ * Every caller is gated on z3660eth_cache != 0, so none of this is reachable on
+ * the 68030 line, where these words would fault.
+ */
+static unsigned long
+z3660eth_rd_dtt0()
+{
+    register unsigned long v __asm__("d0");
+
+    __asm__ __volatile__(".word 0x4e7a,0x0006" : "=d" (v));
+    return v;
+}
+
+static unsigned long
+z3660eth_rd_dtt1()
+{
+    register unsigned long v __asm__("d0");
+
+    __asm__ __volatile__(".word 0x4e7a,0x0007" : "=d" (v));
+    return v;
+}
+
+static unsigned long
+z3660eth_rd_cacr()
+{
+    register unsigned long v __asm__("d0");
+
+    __asm__ __volatile__(".word 0x4e7a,0x0002" : "=d" (v));
+    return v;
+}
+
+/*
+ * Classify one transparent-translation register against one address, for
+ * SUPERVISOR DATA accesses:
+ *   0 = does not cover this address
+ *   1 = covers it, cache-inhibited	(the free ride)
+ *   2 = covers it, CACHED		(the free ride is gone)
+ *
+ * TTR layout (040 and 060 alike; the decode is confirmed by pstart040.s's own
+ * comments, which call ITT0 0x003fc000 "WT-cacheable" and DTT1 0x807fa060
+ * "cache-inhib"):
+ *   31-24 base   23-16 mask   15 E   14-13 S   6-5 CM
+ *   (CM: 0 WT, 1 copyback, 2 CI-serialized, 3 CI-nonserialized)
+ */
+static int
+z3660eth_ttr_class(t, a)
+unsigned long t, a;
+{
+    unsigned long base, mask, s, cm;
+
+    if ((t & 0x8000) == 0)		/* E: a disabled TTR covers nothing */
+	return 0;
+    s = (t >> 13) & 3;			/* 0 = user only, 1 = supervisor, 2/3 = both */
+    if (s == 0)
+	return 0;
+    base = (t >> 24) & 0xFF;
+    mask = (t >> 16) & 0xFF;
+    if ((((a >> 24) & 0xFF) & ~mask) != (base & ~mask))
+	return 0;
+    cm = (t >> 5) & 3;
+    return (cm >= 2) ? 1 : 2;
+}
+
+/*
+ * Check one mapped region, exhaustively.  A TTR's match function depends only on
+ * address bits 31-24, so ONE probe per 16 MB block covers the whole block, and
+ * stepping the blocks covers the region -- which endpoint sampling would not,
+ * because a mask with non-adjacent bits covers a NON-CONTIGUOUS set of blocks
+ * and this driver's frame region sits 0x07ED0000 above its register region.
+ * Returns 1 if any block is not reached cache-inhibited.
+ */
+static int
+z3660eth_ci_span(lo, hi)
+unsigned long lo, hi;			/* lo inclusive, hi exclusive */
+{
+    unsigned long a, last;
+    int bad = 0, c0, c1;
+
+    a = lo;
+    last = (hi - 1) & ~0x00FFFFFFL;
+    for (;;) {
+	c0 = z3660eth_ttr_class(z3660eth_dtt0, a);
+	c1 = z3660eth_ttr_class(z3660eth_dtt1, a);
+	if (c0 == 2 || c1 == 2 || (c0 == 0 && c1 == 0)) {
+	    bad = 1;
+	    cmn_err(CE_WARN,
+		"zen: VA 0x%x is NOT cache-inhibited (dtt0 0x%x dtt1 0x%x)",
+		a, z3660eth_dtt0, z3660eth_dtt1);
+	}
+	if ((a & ~0x00FFFFFFL) >= last)
+	    break;
+	a = (a & ~0x00FFFFFFL) + 0x01000000L;
+    }
+    return bad;
+}
+
+/*
+ * F3-M0.  Run once per successful map, before the first register read, so a
+ * machine whose mailbox would answer out of a stale cache line says so before
+ * anything is believed.  Returns 0 to continue, ENXIO to refuse the attach --
+ * only when z3660eth_ci_enforce is set, because a first-silicon boot that
+ * refuses its own network device tells you nothing.
+ */
+int
+z3660eth_ci_check(board_index)
+int board_index;
+{
+    z3660eth_info_t *info = &z3660eth_board[board_index].z3660eth_info;
+    unsigned long base = (unsigned long)info->board_base;
+    int bad;
+
+    z3660eth_ci_ok = 0;
+    z3660eth_maint_on = 0;
+    if (z3660eth_cache == 0)		/* emulated CPU: nothing to check, nothing to do */
+	return 0;
+
+    z3660eth_dtt0 = z3660eth_rd_dtt0();
+    z3660eth_dtt1 = z3660eth_rd_dtt1();
+    z3660eth_cacr = z3660eth_rd_cacr();
+
+    bad  = z3660eth_ci_span(base, base + ZZ_REGS_BYTES);
+    bad |= z3660eth_ci_span(base + ZZ_RXBACKLOG_OFF, base + ZZ_WINDOW_TOP);
+
+    if (z3660eth_direct_map == 0) {
+	z3660eth_sptalloc_unsafe++;
+	bad = 1;
+	cmn_err(CE_WARN,
+	    "zen: sptalloc mapping arm is unsupported with a live data cache");
+    } else if ((unsigned long)info->regs != base ||
+	       (unsigned long)info->frame != base + ZZ_RXBACKLOG_OFF) {
+	bad = 1;
+	cmn_err(CE_WARN,
+	    "zen: phystokv is not the identity (base 0x%x regs 0x%x frame 0x%x)",
+	    base, (unsigned long)info->regs, (unsigned long)info->frame);
+    }
+
+    if (bad == 0) {
+	z3660eth_ci_ok = 1;
+	z3660eth_maint_on = 1;
+	return 0;
+    }
+    z3660eth_ci_ok = 2;
+    cmn_err(CE_WARN, "zen: cache-inhibit assertion FAILED (cache=%d cacr 0x%x)",
+	(int)z3660eth_cache, z3660eth_cacr);
+    return z3660eth_ci_enforce ? ENXIO : 0;
+}
+
+/* ----------------------------------------------------------------------------
  * 68030 data-cache maintenance for the shared eth DDR windows.  Line-granular
  * cpushl (push dirty + invalidate) over [addr,addr+len); cache line = 16 bytes.
  * Default OFF (see file header).  When enabled, verify the Amix `as` accepts the
@@ -215,6 +408,7 @@ int board_index;
     z3660eth_info_t *info = &board->z3660eth_info;
     long base, size;
     unsigned long hi, lo, bp;
+    int e;
 
     if (info->regs)
 	return 0;
@@ -257,6 +451,16 @@ int board_index;
 	return ENOMEM;
     }
     info->txwin = info->frame + ZZ_TXWIN_OFF;
+
+    /*
+     * F3-M0: assert the free ride BEFORE the first register read, so a stale
+     * cache line cannot be mistaken for a firmware answer.  A no-op with
+     * z3660eth_cache == 0, which is every shipping image.
+     */
+    if (e = z3660eth_ci_check(board_index)) {
+	info->regs = 0;
+	return e;
+    }
 
     /* verify the firmware ethernet register file answers (open bus => absent) */
     hi = RDLONG(info->regs, ZZ_ETH_MAC_HI);
