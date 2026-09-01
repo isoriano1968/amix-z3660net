@@ -252,7 +252,7 @@ Deploy routine (LOCKED, two-tier): **build + clean-gate on WinUAE `.38`** → sh
 ---
 
 ### Sources (file:line via Surveys A–F)
-Guest protocol: `z3660-drivers/eth/device.c` (78-92, 161-211, 495-850), `common/z3660_regs.h` (42-93, 278). Firmware: `rtg/rtg.c` (327-336, 788-809, 1150-1173, 1609-1646), `ethernet.c` (59, 510-668, 1028-1095), `memorymap.h` (16, 30-40), `main.c` (683-692), `Z3660_emu/src/defines.h` (2-15), `interrupt.{c,h}`. Skeleton/wiring: `hydra-amix/usr/sys/amiga/driver/aen/aen.c`, `…/hydra/hydra.c`, `…/master.d/kernel.c` (38, 61, 187, 194, 265-266, 357, 397), `…/driver/Makefile`, `…/driver/{aen,hydra}/Makefile`. Userland: `/mnt/etc/init.d/inetinit`, `/mnt/etc/inet/{network-config, strcf:87-94, rc.inet:42, hosts}`. Kerntools: `amix-kerntools/{build-kernel.sh, templates/, tools/build-clean-kernel.sh}`; SCSI contrast `amix-z3660/{src/z3660.c, driver.conf}`.
+Guest protocol: `z3660-drivers/eth/device.c` (78-92, 161-211, 495-850), `common/z3660_regs.h` (42-93, 278). Firmware: `rtg/rtg.c` (327-336, 788-809, 1150-1173, 1609-1646), `ethernet.c` (59, 510-668, 1028-1095), `memorymap.h` (16, 30-40), `main.c` (683-692), `Z3660_emu/src/defines.h` (2-15), `interrupt.{c,h}`. Skeleton/wiring: `hydra-amix/usr/sys/amiga/driver/aen/aen.c`, `…/hydra/hydra.c`, `…/master.d/kernel.c` (38, 61, 187, 194, 265-266, 357, 397), `…/driver/Makefile`, `…/driver/{aen,hydra}/Makefile`. Userland: `/mnt/etc/init.d/inetinit`, `/mnt/etc/inet/{network-config, strcf:87-94, rc.inet:42, hosts}`. Kerntools: `amix-kerntools/{build-kernel.sh, templates/, tools/build-clean-kernel.sh}`; SCSI contrast `amix-z3660scsi/{src/z3660.c, driver.conf}`.
 
 
 # ADVERSARIAL REVIEW (4 lenses)
@@ -506,7 +506,7 @@ The section correctly *names* the risk (async shared-DDR coherency, lpsched-clas
 
 **The corrected fix the design must adopt:** Treat establishing the 030 cache policy of the eth **DDR frame pages** (not just the register page) as a hard Phase-0 deliverable: determine whether `sptalloc`'s `flag` arg can request a cache-inhibited PTE and **use it** for `0x07ED0000`/`0x07EE0000`; if it cannot, add explicit `cinvl` (RX slot, before each header+payload read) and `cpushl` (TX frame, after fill, before the `0x190` trigger) — re-enabling, in driver form, the very `CacheClearE` the AmigaOS guest left commented at `device.c:817`. Until that policy is *proven* (not assumed), the datapath is undefended against the design's own #1-ranked risk.
 
-**Key file:line evidence:** `amiga/ml/ttrap.s:327,329` (TT `CI=0`); `amiga/ml/syms.s:2` (u-area `0x40000000`, why TT0 stops at `0x3FFFFFFF`); `amix-z3660/src/z3660.c:28-31,139-142,220-228,378-381` (synchronous mailbox, `sptalloc(PG_V,…,0)`, zero cache maintenance); `amix-z3660/NOTES.md:48-50` (SCSI coherency "largely disappears" 🟡 *unverified*); `hydra-amix/.../aen/aen.c:320` & `alien/a2091.c:411` (Zorro boards deref autocon base directly — cacheable via TT0); firmware `ethernet.c:1039-1040` (TX flush) vs `546-548` (RX invalidate commented out), `553-561` (serial-last publish order); guest `device.c:817` (commented-out `CacheClearE` — the real RX-coherency precedent); `zorro-autoconfig.md:58-64` (TT-gap, `sptalloc`).
+**Key file:line evidence:** `amiga/ml/ttrap.s:327,329` (TT `CI=0`); `amiga/ml/syms.s:2` (u-area `0x40000000`, why TT0 stops at `0x3FFFFFFF`); `amix-z3660scsi/src/z3660.c:28-31,139-142,220-228,378-381` (synchronous mailbox, `sptalloc(PG_V,…,0)`, zero cache maintenance); `amix-z3660scsi/NOTES.md:48-50` (SCSI coherency "largely disappears" 🟡 *unverified*); `hydra-amix/.../aen/aen.c:320` & `alien/a2091.c:411` (Zorro boards deref autocon base directly — cacheable via TT0); firmware `ethernet.c:1039-1040` (TX flush) vs `546-548` (RX invalidate commented out), `553-561` (serial-last publish order); guest `device.c:817` (commented-out `CacheClearE` — the real RX-coherency precedent); `zorro-autoconfig.md:58-64` (TT-gap, `sptalloc`).
 
 ## LENS — dlpi-streams-completeness
 The firmware never calls `XEmacPs_SetOptions` to set FCS strip, and the guest never subtracts CRC. The most likely reality: the Xilinx EmacPs init default (via `XEmacPs_CfgInitialize` and the BSP `xemacps_example_util` flow) commonly enables `XEMACPS_NWCFG_FCSREM` in the network config, OR the guest tolerates trailing FCS. This is genuinely ambiguous from source alone — exactly why the design correctly flagged it as a real-HW-gated question. My finding refines it: the **working SANA-II guest does NOT subtract CRC**, so the aen `count - ETH_CRC_LEN` convention may be WRONG for Z3660 and would truncate 4 payload bytes. That's a concrete, important correction.
@@ -743,7 +743,7 @@ The plan's **mechanics are right** (cdevsw row, int2_tbl/init_tbl append, subdir
 
 Both are fixable in Phase 0/1 but **must** be done before any gate run is trusted. Add to Phase 0: (a) pull live `kernel.c`/`driver/Makefile` from the box and verify anchors; (b) rewrite `build-clean-kernel.sh`'s touch/rm to take full on-box paths covering `amiga/driver/z3660eth/{z3660eth.o,exp}`, `amiga/driver/exp`, and `master.d/kernel.o`; (c) decide aen-style lazy-open (safer for the gate box) vs hydra-style `init_tbl` probe. Secondary: IMPORTANT-1..4 (Makefile anchor, init model, `ifstats` extern, driver.conf parser refactor without regressing the proven SCSI path).
 
-Key files: `~/Devel/Omat/Amiga/Amix/hydra-amix/usr/sys/master.d/kernel.c` (reference, lines 38/61/185/187/193-194/265-266/342/357/397/398); `~/Devel/Omat/Amiga/Amix/hydra-amix/usr/sys/{Makefile, amiga/Makefile, amiga/driver/Makefile, amiga/driver/{aen,hydra}/Makefile}`; `~/Devel/Omat/Amiga/Amix/amix-kerntools/{build-kernel.sh:69-145, tools/build-clean-kernel.sh:27-28, README.md:21-22, templates/}`; `~/Devel/Omat/Amiga/Amix/amix-z3660/driver.conf`.
+Key files: `../hydra-amix/usr/sys/master.d/kernel.c` (reference, lines 38/61/185/187/193-194/265-266/342/357/397/398); `../hydra-amix/usr/sys/{Makefile, amiga/Makefile, amiga/driver/Makefile, amiga/driver/{aen,hydra}/Makefile}`; `../amix-kerntools/{build-kernel.sh:69-145, tools/build-clean-kernel.sh:27-28, README.md:21-22, templates/}`; `../amix-z3660scsi/driver.conf`.
 
 
 # SURVEY EVIDENCE (6 deep-reads)
@@ -1637,7 +1637,7 @@ Unlike SCSI (regenerate the whole `sd.c` from a template), the net path **anchor
 - Makefiles — `driver/Makefile:3-30`; `aen/Makefile`, `hydra/Makefile` (`-I../../.. -I../../inc`).
 - fmodsw (modules, NOT drivers) — `master.d/filesys.c:71-93`.
 - unix.c (root/swap only) — `amiga/config/unix.c:8-22`.
-- kerntools — `build-kernel.sh:63-164`; `templates/sd.c.in:24-33,92`; `templates/alien-Makefile.in`; `tools/build-clean-kernel.sh` (whole file); SCSI contrast `amix-z3660/driver.conf` and `src/z3660.c:38-41,164,258`.
+- kerntools — `build-kernel.sh:63-164`; `templates/sd.c.in:24-33,92`; `templates/alien-Makefile.in`; `tools/build-clean-kernel.sh` (whole file); SCSI contrast `amix-z3660scsi/driver.conf` and `src/z3660.c:38-41,164,258`.
 
 **Could not confirm this session:** the golden image's actual `/dev` net-device node name/minor (stale NFS handle on `/tmp/amixgold`) — verify on-box with `ls -l /dev` for the aen node before choosing our minor convention.
 

@@ -34,8 +34,10 @@ nothing.
 
 The driver does contain a cache block, and it has never been built. `src/Makefile:7` is
 `CFLAGS = -O -D_KERNEL -DSVR40 -DSVR4 …` with no `-DZ3660ETH_CACHE_FLUSH` (**measured**), and
-none is injected by the relink scripts. The repo says so in its own words:
-*"Untested, because it was never needed"* (`GRIMOIRE-HANDOFF.md:264`, **measured**).
+none is injected by the relink scripts. The repo says so in its own words: metal bring-up needed
+*"no cache maintenance … either"* (`README.md` §"Status", **measured**), and the flush helper
+was *"Untested, because it was never needed"* (internal handoff `GRIMOIRE-HANDOFF.md:264` —
+gitignored, not part of this repo).
 
 So the block is not a working feature that is switched off. It is **four defects in a dead
 branch**, and BLIZZARD §G/D8 rules that it is repaired rather than deleted, because the device it
@@ -79,7 +81,9 @@ CPU↔CPU aliasing class here at all — no S5/S6, no S8, no page-cross law, bec
 
 The driver's own file header has this backwards, and so does the handoff: both argue from *"the
 window is cacheable"* to *"we got away with it because the 030 data cache is effectively off"*
-(**measured**, `GRIMOIRE-HANDOFF.md:256-260`). That reasoning is correct **for the 030** and is the
+(**measured** — the header's *"the 030 data cache is effectively off in every validated config"*,
+`src/z3660eth.c:46-47`; the handoff argues the same at `GRIMOIRE-HANDOFF.md:256-260`, which is
+gitignored and not part of this repo). That reasoning is correct **for the 030** and is the
 weaker of the two positions. On the 040/060 line the same window is cache-inhibited by a kernel
 constant no code in this repo names.
 
@@ -525,7 +529,8 @@ Same kernel, same driver object, both arms, arm A first:
 > **15/15 cycles clean on arm B**, where one clean cycle is all four of:
 > - every transferred file byte-identical, both directions;
 > - **40/40 flood ping, 0% loss** — the bar the 2026-06-21 metal soak was accepted at
->   (**measured**, `GRIMOIRE-HANDOFF.md:56`);
+>   (**measured**: *"laptop→box flood ping 40/40, 0% loss"*, `README.md` §"Status";
+>   internal provenance `GRIMOIRE-HANDOFF.md:56`);
 > - `netstat -in` showing **0 input errors, 0 output errors, 0 collisions** — same source;
 > - **8/8 canary binaries byte-identical.**
 >
@@ -535,7 +540,9 @@ Same kernel, same driver object, both arms, arm A first:
 > **failed** run, because it proves nothing was exercised.
 >
 > **Recorded, not gated:** sustained FTP throughput both arms. The 030 metal reference is
-> **~185 KiB/s** (**measured**, `GRIMOIRE-HANDOFF.md:61`); the arm-A-vs-arm-B delta is the price of
+> **~185 KiB/s** (**measured**: *"sustained FTP throughput ~185 KiB/s (stable across runs)"*,
+> `README.md` §"Status"; internal provenance `GRIMOIRE-HANDOFF.md:61`); the
+> arm-A-vs-arm-B delta is the price of
 > the belt and belongs in the record, but a throughput regression is not a correctness failure and
 > must not be allowed to masquerade as one.
 
