@@ -8,7 +8,7 @@ Target: `z3660eth` — a native AMIX (Commodore Amiga Unix SVR4.0, m68k 68030) S
 
 > ⚠️ **This is the raw pre-review draft + adversarial-review record, kept for its evidence and file:line citations — it is NOT current guidance.** The authoritative documents are `driver.conf`, `BUILD.md` and `docs/ETHERNET-SCOPING.md` (FINAL).
 >
-> **Major-number supersession (2026-07-27):** this draft picked cdevsw major **48**; the driver's major is now **51**. Every prescriptive `48` below has been renumbered, but the *evidence* statements about the stock table (e.g. "`kernel.c:398` is the empty `/*48*/` row", "48–69 are `nostr` filler") are left as-read: they are facts about the **stock** `cdevsw[]`, not about our claim. 48 turned out to be contested by an unpublished community tree, 49 is published `zz9000`, 68 is `va2000` — the verified-free set is **51–67 and 69** and 51 is its lowest slot. Rationale in `BUILD.md` §2(b); evidence in `../grimoire-amix/docs/reference/major-number-registry.md`.
+> **Major-number supersession (2026-07-30):** this draft picked cdevsw major **48**; the driver's major is now **51**. Every prescriptive `48` below has been renumbered, but the *evidence* statements about the stock table (e.g. "`kernel.c:398` is the empty `/*48*/` row", "48–69 are `nostr` filler") are left as-read: they are facts about the **stock** `cdevsw[]`, not about our claim. 48 turned out to be contested by an unpublished community tree, 49 is published `zz9000`, 68 is `va2000` — the verified-free set is **51–67 and 69** and 51 is its lowest slot. Rationale in `BUILD.md` §2(b); evidence in `../grimoire-amix/docs/reference/major-number-registry.md`.
 
 ---
 
@@ -245,7 +245,7 @@ Deploy routine (LOCKED, two-tier): **build + clean-gate on WinUAE `.38`** → sh
 
 **Phase 4 — Coherency soak + hardening.**
 - Sustained TX+RX under load with byte-verification (the eth analogue of the SCSI `[WVERIFY]` campaign) — the only way to clear Q-COHERENCY, Q3, Q6, Q7. Resolve multicast/promisc policy (Q5). Persistent `/etc/inet` config + `zen -S` presence tool. Tune spl/flow-control.
-- **Deliverable:** a stable, persistent, reboot-surviving network interface, soak-clean for coherency — ready to commit on a `wip-ethernet` branch off `amix-base`.
+- **Deliverable:** a stable, persistent, reboot-surviving network interface, soak-clean for coherency — ready to commit on a `wip-ethernet` branch off `amix-base`. *(Superseded: the work shipped on `master`; the `wip-ethernet`/`amix-base` branch model was never used.)*
 
 **Critical-path note:** Phases 2–4 are **real-HW-gated** (WinUAE has no GEM). Front-load every source-answerable question into Phase 0/1 so real-HW sessions (serial+KVM, no network until this works) are spent purely on the datapath and coherency, not on integration mechanics.
 
