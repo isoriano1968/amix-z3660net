@@ -8,7 +8,7 @@ fallback if the automation hits anything unexpected on the live tree.
 
 The build/clean-gate runs **on a networked AMIX box** (the WinUAE/Amiberry build box
 at `192.168.2.38`). The real A4000+Z3660 has no network — the clean `relocunix` is
-shuttled to it via `transfer.hdf` (see the locked two-tier routine in the project notes).
+shuttled to it via `transfer.hdf` (the two-tier routine is spelled out in §7).
 
 ## 0. Prereqs
 - Build box up: `amiberry --config ../amix-kerntools/configs/amix-golden.uae` + the
@@ -110,8 +110,8 @@ text and its `/*51=z3660eth*/` tag are a cross-repo contract — do not reshape 
 ## 4. Clean-gate relink (the D245 boot-breaker workaround)
 On-box `ld` corrupts ~70% of kernel links under emulation, so relink until the kernel is
 provably clean. For this (larger) net kernel the bar is **`nm -h -u unix` empty +
-`checkunix`-clean** — `sum -r` recurrence does *not* converge at this size (the committed
-`build-clean-net-kernel.sh` predates this; prefer the `nm -u` bar — see `GRIMOIRE-HANDOFF.md` §8).
+`checkunix`-clean** — `sum -r` recurrence does *not* converge at this size — the bar is
+implemented by `../amix-kerntools/tools/build-clean-net-kernel.sh`, whose header states it.
 The net-aware gate removes the right stale objects (the SCSI gate is hardcoded to
 `alien/` and will NOT rebuild a `driver/` subdir or `kernel.c`):
 ```
@@ -141,7 +141,45 @@ Shuttle the clean `relocunix` to the real box via `transfer.hdf` (`c5d0`), stage
 `cd /stand; make`, reboot. Then bring the interface up at **192.168.2.39** per
 `userland/bringup.sh` and test TX → RX → ARP+ping. Never re-image the root.
 
-## Real-world build notes (validated 2026-06-21 on the WinUAE build box)
+## 8. Cache maintenance and the two mapping arms (030 vs 040/060)
+Relevant if you are building `z3660eth` into anything other than a stock 68030 AMIX kernel — the
+68040/68060 line (`amix-040-060-port`) in particular. Authority: `docs/BLIZZARD-F3.md`.
+
+**The 030 line ships with no cache maintenance and needs none.** Metal bring-up (2026-06-21) ran
+TX and RX byte-correct with no flush at all; the eth DDR windows are cacheable there, but the 030
+data cache is effectively off in every validated config. Nothing to configure.
+
+**The 040/060 line has line-granular maintenance compiled in, and disabled.** Since 2026-08-24
+there is no `Z3660ETH_CACHE_FLUSH` `#ifdef`: the push/invalidate paths are always compiled and
+gated at run time by the tunable `long z3660eth_cache` — **0 = off, the shipping default**, `40` =
+68040 data cache, `60` = 68060. Arming it is a `/dev/kmem` poke, not a build flag, so the same
+`relocunix` serves both lines. Read back through `/dev/kmem` after attach:
+
+| symbol | meaning |
+|--------|---------|
+| `z3660eth_ci_ok` | 0 = not checked, 1 = the free ride verified, 2 = **FAILED** |
+| `z3660eth_maint_on` | 1 = all four conjuncts hold, line ops actually armed |
+| `z3660eth_sptalloc_unsafe` | non-zero = the sptalloc arm was taken with a live data cache |
+| `z3660eth_dtt0` / `z3660eth_dtt1` / `z3660eth_cacr` | the control registers captured at attach |
+| `z3660eth_push_n` / `z3660eth_inv_n` / `z3660eth_push_bytes` / `z3660eth_inv_bytes` / `z3660eth_sync_n` / `z3660eth_range_ovf` | the six line-op counters |
+
+`z3660eth_ci_enforce` (default 0) decides what a failed check costs: 0 warns via `cmn_err` and
+continues, non-zero refuses the attach with `ENXIO`.
+
+**The two mapping arms are not interchangeable here.** `z3660eth_map()` takes the physical base as
+the kernel VA directly when the whole window lies below `VSECT1` (`0x40000000`) — AMIX's section-0
+early-termination descriptor makes `phystokv()` the identity — and only a board at or above
+`VSECT1` takes `sptalloc()`. The 040/060 maintenance depends on the direct arm: `CPUSHL`/`CINVL`
+select a line by *physical* address, and the `DTT0 = 0x003fc060` free ride that keeps the window
+cache-inhibited is what makes the driver's kernel VA a physical one. On the `sptalloc` arm the VA
+has no relation to the board's physical address, so **maintenance disarms rather than guessing**
+and the arm is declared unsupported with a live data cache. The shipped Z3660 config (fixed base
+`0x10000000`) is always the direct arm.
+
+## Real-world build notes (historical record, validated 2026-06-21 on the WinUAE build box)
+The current build harness is **Amiberry** with `../amix-kerntools/configs/amix-golden.uae` (§0).
+The WinUAE specifics below are kept as the record of where the FTP-asymmetry and clean-gate
+lessons were learned; `AmigaUnix-z3660.uae` is that box's own config, not a kerntools one.
 The box is **WinUAE on Xvfb :101**, config `AmigaUnix-z3660.uae` (a2065=tap:tap0, guest **192.168.2.38**), root disk
 `Amix-z3660-work.hdf` = the build tree. Launch: `sudo /usr/local/sbin/amix-lan-up.sh` + `DISPLAY=:101 winuae -config=…`.
 Set `AMIX_PASS` to the build-image root password → `export AMIX_HOST=192.168.2.38 AMIX_USER=root AMIX_PASS=<pw>`.
@@ -157,5 +195,5 @@ Set `AMIX_PASS` to the build-image root password → `export AMIX_HOST=192.168.2
 - **★ clean-gate reality:** on this (larger) kernel the D245 `ld` corruption rate is high, so relink until clean. The
   correct accept bar is **`nm -h -u unix` empty (no undefined symbols) AND `checkunix`-clean** — `sum -r` recurrence does
   *not* converge at this kernel size and is **not** the gate here (it still works for the small SCSI kernels). `checkunix`
-  alone is insufficient (it only validates `.symtab`; a code/data shift passes it). The committed
-  `tools/build-clean-net-kernel.sh` implements the `nm -u` bar; run it at a high cap.
+  alone is insufficient (it only validates `.symtab`; a code/data shift passes it).
+  `../amix-kerntools/tools/build-clean-net-kernel.sh` implements the `nm -u` bar; run it at a high cap.
