@@ -24,6 +24,11 @@ Compilation and kernel integration are handled by the **`amix-kerntools`** build
 which reads this repo's `driver.conf` by relative path. This repo carries only the
 driver source, its `driver.conf`, the userland bring-up, and the design docs.
 
+`z3660eth` registers at **cdevsw major 51** (renumbered from 48 on 2026-07-30 —
+48 turned out to be contested; see `BUILD.md` §2(b)), and its device node is
+`/dev/zen0` = `mknod /dev/zen0 c 51 0`. Those are the two integration facts
+another driver author or a packager needs first.
+
 ## Status — ✅ WORKS ON REAL HARDWARE (2026-06-21)
 
 AMIX has full bidirectional TCP/IP over `zen0` on a real **A4000 + Z3660**:
@@ -59,12 +64,22 @@ bring-up can race the inet base streams on a fast clean boot — S99zen runs a b
 - `driver.conf` — the `net` stanza consumed by `amix-build`.
 - `userland/` — `zen.c` (the `zen -S` presence tool), the `/etc/inet` config
   snippet, and the manual interface bring‑up runbook.
+- `tools/` — the two fail‑closed on‑box patch scripts (`patch-kernel.sh` claims
+  the cdevsw row, `patch-makefile.sh` the driver `OBJ` list) plus
+  `patch-selftest.sh`, their benchless host‑side fixture battery.
 - `BUILD.md` — the exact on‑box build + kernel‑integration steps (the manual
   procedure that `amix-kerntools` automates).
+- `docs/BLIZZARD-F3.md` — the cache-coherence pre-registration and its round-2
+  result: why the 030 needs no maintenance and how the 040/060 gate works.
+- `CHANGELOG.md` — what changed, when, and against which commit.
 
 ## How it works (one paragraph)
 Discovery mirrors `z3660.c`: `autocon(0x144B0001)`, else (AGA only) the fixed combo
-base `0x10000000`, verified via the firmware MAC register. The board's eth
+base `0x10000000`, verified via the firmware MAC register. When the whole window
+lies below `VSECT1` (`0x40000000`) the physical base is used as the kernel VA
+directly — AMIX's section‑0 early‑termination identity map, no `sptalloc`; only a
+board at or above `VSECT1` takes the `sptalloc` arm, which the 040/060 cache work
+declares unsupported with a live data cache. The board's eth
 registers sit in the RTG register page (`board+0x104..0x1A8`); TX frames stage at
 `board+0x07EE0000`, the RX backlog ring at `board+0x07ED0000` (32×2048, 4‑byte
 `[len][serial]` header). **TX** copies the frame to the TX window and writes the
