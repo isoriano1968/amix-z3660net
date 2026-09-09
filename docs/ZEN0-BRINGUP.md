@@ -381,8 +381,8 @@ running `/usr/amiga/bin/aen -S; echo $?` by hand: a bare `1` with no message is 
   comes up, where the static IP/hostname/netmask/gateway live, and what `slink addaen` actually does
   (it links the driver stream under **two** multiplexors, IP *and* ARP).
 
-> ⚠ **`GRIMOIRE-HANDOFF.md` is a frozen 2026-06 handoff document and still says `mknod /dev/zen0 c
-> 48 0`** (§6 at line 211, §9.2 at lines 343-344). **48 is stale** — the major was renumbered to
-> **51** on 2026-07-30. The
-> authoritative value is in `driver.conf`, `README.md` and this file. Its `slink`/race material
-> (§7.4, §9.2) is still current and is cited above.
+> ⚠ **`GRIMOIRE-HANDOFF.md` was a frozen 2026-06 handoff document that until 2026-09-09 still
+> said `mknod /dev/zen0 c 48 0`** (§6, §9.2) — 48 was stale, superseded by the 2026-07-30
+> renumber to **51**. It has since been corrected in place (its own top-of-document correction
+> note explains why); the authoritative value remains `driver.conf`, `README.md` and this file.
+> Its `slink`/race material (§7.4, §9.2) was and still is current and is cited above.
