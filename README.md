@@ -49,9 +49,25 @@ are now compiled in always and gated at run time by `z3660eth_cache`, whose
 default 0 keeps every 040/060 opcode unreachable on the shipping images — see
 `docs/BLIZZARD-F3.md`.
 
-Auto-bring-up at boot = `userland/S99zen` (→ `/etc/rc2.d/S99zen`). Note: the
-bring-up can race the inet base streams on a fast clean boot — S99zen runs a bare
-`slink` first and retries `slink addaen` to make it reliable.
+## Bringing it up on a real box → [`docs/ZEN0-BRINGUP.md`](docs/ZEN0-BRINGUP.md)
+
+**★ Under the Amix-interop Z3660 firmware fork, Amix's stock `aen` ethernet driver
+can never work — `zen0` is the only path.** `aen` hunts Commodore/A2065 board id
+`0x02020070`; the firmware presents every emulated autoconfig board as manufacturer
+`0x144B` and has A2065 emulation commented out of its embedded UAE core. A
+manufacturer id is not settable by any `autoconfig_*` key, so no configuration
+reaches this. Corollary worth the several hours it cost: *"that box networks on
+`aen0`"* is a fact about **that box's firmware build** and never transfers across a
+firmware boundary.
+
+[`docs/ZEN0-BRINGUP.md`](docs/ZEN0-BRINGUP.md) is the field-proven runbook — the
+evidence for the above, the five-command manual bring-up (verified first try on real
+68LC060 metal, 2026-09-09), the `/etc/rc2.d/S99zen` persistence script with its exact
+shipped body, the three identity files (and why `setuname -n` is *not* one of them),
+and a triage section for telling which path a box is on. Auto-bring-up at boot =
+`userland/S99zen` (→ `/etc/rc2.d/S99zen`); it runs a bare `slink` first and retries
+`slink addaen`, because the bring-up can otherwise race the inet base streams on a
+fast clean boot.
 
 ## Layout
 - `src/z3660eth.c` — the driver (STREAMS/DLPI skeleton adapted from the stock
@@ -69,6 +85,9 @@ bring-up can race the inet base streams on a fast clean boot — S99zen runs a b
   `patch-selftest.sh`, their benchless host‑side fixture battery.
 - `BUILD.md` — the exact on‑box build + kernel‑integration steps (the manual
   procedure that `amix-kerntools` automates).
+- `docs/ZEN0-BRINGUP.md` — the field-proven bring-up runbook: why `aen` can never
+  work under this firmware, the five-command sequence, `S99zen` persistence, the
+  identity files, and how to tell which path a box is on.
 - `docs/BLIZZARD-F3.md` — the cache-coherence pre-registration and its round-2
   result: why the 030 needs no maintenance and how the 040/060 gate works.
 - `CHANGELOG.md` — what changed, when, and against which commit.
