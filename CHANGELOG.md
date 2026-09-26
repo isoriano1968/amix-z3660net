@@ -1,5 +1,83 @@
 # Changelog
 
+## 2026-09-09 — docs: the field-proven zen0 bring-up procedure; GRIMOIRE-HANDOFF cross-reference corrected (74d8564, ae808a7)
+
+`docs/ZEN0-BRINGUP.md` records the bring-up as it was actually done on metal (major 51 verified on the
+box 2026-09-09), so the next person does not rediscover it; the handoff's stale 48→51 renumber
+cross-reference is corrected.
+
+## 2026-09-01 — docs-currency sweep: README, BUILD, ETHERNET-SCOPING, BLIZZARD-F3
+
+No code change; the public docs are brought level with HEAD.
+
+- `BUILD.md` (`8a714a1`): §4 claimed the committed clean-gate script "predates" the `nm -u` bar
+  and cited `GRIMOIRE-HANDOFF.md` §8 — contradicting the same file's own tail note, and citing a
+  gitignored file no reader can open. `../amix-kerntools/tools/build-clean-net-kernel.sh` opens
+  "THE BAR IS nm -u, NOT sum-recurrence", so the tail note was the true one. Both references to
+  that script also spelled it as this repo's `tools/`, where it does not exist. "the locked
+  two-tier routine in the project notes" now points at §7, which spells it out. The build box was
+  described two ways (Amiberry + amix-golden.uae in §0, WinUAE + a config that resolves to
+  nothing at the tail); the tail block is now marked the historical record. New §8 documents the
+  cache gate, the kmem-readable verdict and counters, and why the direct-map arm is required.
+- `README.md` (`9324b91`): cdevsw major **51** and the `/dev/zen0` (`c 51 0`) node — the two facts
+  another driver author or packager needs first — appeared nowhere on the page; now in Scope.
+  Layout gained `tools/`, `docs/BLIZZARD-F3.md` and `CHANGELOG.md`. "How it works" now names the
+  mapping arm (direct dereference below VSECT1, `sptalloc` only above it), which the 040/060 DTT0
+  free ride depends on.
+- `docs/ETHERNET-SCOPING.md` (`9498305`): the banner still said the datapath was untested and
+  named Phase 2/3 as NEXT — retitled to PROJECT STATUS — SHIPPING ON REAL HARDWARE with the metal
+  result. §10.1's heading claimed the driver "does explicit line-granular 030 cache ops, always",
+  which it has never done; heading and DECISION bullet now record that the prescribed 030 ops were
+  designed and never shipped, and why. §5's Q-COHERENCY block and the §0 confidence table/verdict
+  are annotated in place (the as-written review record is preserved). §8 gains a head note naming
+  Q5 and Q6 as the only two items still open and a per-item marker on the nine that closed. §4.3
+  said "seven" over a list of six and never acquired the DL_ERROR_ACK/DL_BADPRIM arm (`364333c`);
+  both fixed. Four sites still carried 2026-07-27 for work that landed 2026-07-30 (`c949380`,
+  `f12b2d5`) — `b9991e3` had fixed only driver.conf. The private `wip-ethernet` memory pointer is
+  dropped and the `wip-ethernet`/`amix-base` branch plan marked superseded.
+- `docs/{BLIZZARD-F3,ETHERNET-SCOPING-evidence}.md` (`98e269c`): `3b97dca` missed five
+  `amix-z3660` → `amix-z3660scsi` sites in the evidence dossier and the SCOPING sources footer.
+  BLIZZARD-F3's four **measured** citations — including both of the pass line's own anchors —
+  pointed at the gitignored `GRIMOIRE-HANDOFF.md`; the values are inlined and re-cited to
+  README §"Status" and `src/z3660eth.c:46-47`, with the handoff line numbers kept as internal
+  provenance.
+
+## 2026-08-24 — z3660eth: 040/060 cache maintenance behind a run-time gate (BLIZZARD F3 round 2)
+
+The dead `Z3660ETH_CACHE_FLUSH` `#ifdef` is gone. `src/Makefile` never passed the -D, so the
+block it hid had been compiled out of every kernel that ever booted and was four defects deep
+when finally read. Maintenance is now always compiled and gated at run time by `z3660eth_cache`
+(0 = off, the shipping default; 40 = 68040 DC, 60 = 68060 DC, poked through /dev/kmem), so the
+same relocunix serves the 030 and the 040/060 lines and the code is reviewable rather than
+invisible.
+
+- **F3-M0 (`571f4d4`)** — attach-time assert that the free ride is real: `z3660eth_ci_check()`
+  captures DTT0/DTT1/CACR and requires `DTT0 = 0x003fc060` to leave the whole low 1 GB, both
+  mapped spans included, cache-inhibited. Verdict readable through /dev/kmem as
+  `z3660eth_ci_ok` (0 unchecked / 1 verified / 2 FAILED) with `z3660eth_maint_on` and
+  `z3660eth_sptalloc_unsafe`; `z3660eth_ci_enforce` decides whether a failure warns or refuses
+  the attach with ENXIO. The `sptalloc` mapping arm is declared **unsupported with a live data
+  cache** — its VA has no relation to the board's physical address, and CPUSHL/CINVL select a
+  line physically, so maintenance disarms there rather than discarding some other subsystem's
+  dirty line.
+- **F3-M2 (`1bdaecb`)** — the previously identical PUSH/INVAL pair is split into real `cpushl`
+  and `cinvl` raw `.word`s (f468 / f448, encodings measured both directions against as 2.8.1),
+  because CACR.DPI gates CPUSHL's invalidate on the 68060 and push-as-invalidate silently stops
+  invalidating there. Six line-op counters (`z3660eth_push_n`, `_inv_n`, `_push_bytes`,
+  `_inv_bytes`, `_sync_n`, `_range_ovf`) are kmem-readable.
+- **Docs (`4820333`, `084a945`, `df23adc`, `d71886c`, `b4371d4`)** — round 2 pre-registered
+  before it was written (`docs/BLIZZARD-F3.md`); the "no PG_CI bit" claim corrected to an 030
+  fact, not a universal one (the 040/060 kernel writes a two-bit leaf CM instead); the three
+  ETHERNET-SCOPING §10.1 claims that do not carry to 040/060 marked; the result appended with
+  nothing above it edited; README's cache paragraph rewritten.
+- **Evidence (object-level, no metal):** `nm -u` byte-for-byte identical to the baseline; all
+  six 040/060 instruction sites (`movec` ×3, `cpushl`+`cinvl`, `cinvl`, `nop`) proven dominated
+  by a `tstl z3660eth_cache` / `beq` in the disassembly; the comment-only correction commit
+  byte-identical at the object level (`z3660eth.o` and `ld -r exp`, sha256 `736afcc2…`);
+  `-Wall` unchanged.
+- **Nothing here is evidence about a real cache.** The §7 metal A/B soak is still owed, and a
+  green run with zero counters would be a failed run.
+
 ## 2026-08-18 — z3660eth: page-size-agnostic window geometry (ded6ef4)
 
 The frame-window math is now bytes-primary: ZZ_FRAME_BYTES (0x20000) and
@@ -23,6 +101,7 @@ under 0x40000000 (section-0 early-termination identity map — AMIX does NOT use
 68030 TT registers; ETHERNET-SCOPING §10.1); sptalloc kept only for a board at/above
 VSECT1 (autoconfig_rtg). The metal 0x10000000 case now draws 0 sptmap pages (was 65).
 Metal-proven: flew in the Route-A v3/v4 kernels at 88 MB with zen0 up.
+
 ## 2026-07-31 — on-box patch scripts made fail-closed (half-patch audit packet B)
 
 - `tools/patch-kernel.sh`, `tools/patch-makefile.sh` (`603c719`): the name-wide
