@@ -148,7 +148,7 @@ hardwired to CIA-B: it gates on Paula `INTREQR` bit 13, dismisses only Paula's l
 the single fixed handler `aciabintr`. There is no `int6_tbl` and no level-6 registration API.
 So the Z3660's `/INT6` passes the gate but nothing ever acks the board, and because `/INT6`→EXTER
 is level-sensitive it re-latches on every `rte` — the unbounded IPL6 storm behind the 2026-06-21
-hard-lock. Confirms the shipped `ZZ_CONFIG_DISABLE` + bounded polled drain (`b06cf45`) as correct
+hard-lock. Confirms the shipped `ZZ_CONFIG_DISABLE` + bounded polled drain (`028c8d2`) as correct
 architecture, not a workaround.
 
 ## 2026-07-26 — z3660eth defect packet (P0.3): three deferred STREAMS defects fixed
