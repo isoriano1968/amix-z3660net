@@ -8,7 +8,7 @@ Target: **`z3660eth`** — a native AMIX (Commodore Amiga Unix SVR4.0, m68k 6803
 
 ## ★ PROJECT STATUS — SHIPPING ON REAL HARDWARE (2026-06-21)
 
-**z3660eth compiles clean, links into a clean kernel, BOOTS to `login:` (no panic), registers in its cdevsw slot, and `open(/dev/zen0)` returns `errno=6 ENXIO`** (the lazy-open probe correctly finds no GEM on WinUAE) — the box survives. That was the Phase-1 acceptance gate. Driver fixes committed in `amix-z3660net@84c9a4f`; corrected build tooling in `amix-kerntools@e5d000b`.
+**z3660eth compiles clean, links into a clean kernel, BOOTS to `login:` (no panic), registers in its cdevsw slot, and `open(/dev/zen0)` returns `errno=6 ENXIO`** (the lazy-open probe correctly finds no GEM on WinUAE) — the box survives. That was the Phase-1 acceptance gate. Driver fixes committed in `amix-z3660net@9d12f3b`; corrected build tooling in amix-kerntools `tools/build-clean-net-kernel.sh` — the clean-gate bar became *`nm -h -u unix` empty, then `checkunix`*, replacing the `sum -r` recurrence wait (published in the public amix-kerntools history from its initial import).
 
 **Phases 2–4 landed the same day on the real A4000+Z3660.** Full bidirectional TCP/IP over `zen0` @ `192.168.2.39`: 40/40 flood ping 0% loss, `telnet` and `ftp` over the interface, `netstat -in` showing 0 input errors / 0 output errors / 0 collisions, ~185 KiB/s sustained FTP. The only real-HW blocker was the firmware's INT6 storm — RX ships as a bounded polled drain instead (§10.2). **Everything below this banner is the as-written design record, kept for its reasoning and its review trail;** for what the driver does today read `README.md` "Status", and `CHANGELOG.md` for every change since.
 
@@ -157,7 +157,7 @@ would require patching stock ml (`ttrap.s`) and relinking — kernel-source surg
 driver-drop model. (3) A level-6 handler would run at IPL6, above the clock and serial — the
 wrong place for per-frame RX work regardless. **Resolution: the shipped design is the correct
 architecture, not a workaround** — `ZZ_CONFIG_DISABLE` so INT6 never fires, plus the bounded
-polled drain (commit `b06cf45`). The §3 contingency stands as the only interrupt-driven path:
+polled drain (commit `028c8d2`). The §3 contingency stands as the only interrupt-driven path:
 firmware routing eth notification to INT2 (PORTS, gate `0x0008`, `ttrap.s:33`) would be served by
 the existing `p2int` walk via an `int2_tbl[]` entry — a one-line `master.d/kernel.c` edit at
 kernel-build time, since the table is link-time-fixed; note every `int2_tbl` handler is called on

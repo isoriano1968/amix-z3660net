@@ -209,8 +209,9 @@ Substitute your own address, netmask and gateway on the `ifconfig` and `route` l
 
 1. **It retries `slink addaen` up to 20 times, 3 s apart.** The STREAMS stack is not ready the
    instant `rc2` runs. ✅ Same 2026-06-21 race as §2.1; the loop plus the leading bare `slink` is
-   the mitigation (`GRIMOIRE-HANDOFF.md` §7.4, §9.2). The initial `sleep 5` gives the base streams
-   a head start before the first attempt. Worst case the loop spends ~60 s and gives up — in the
+   the mitigation (`userland/S99zen:10-14`, loop at `:19-26`; internal provenance
+   `GRIMOIRE-HANDOFF.md` §7.4, §9.2 — gitignored, not part of this repo). The initial `sleep 5`
+   gives the base streams a head start before the first attempt. Worst case the loop spends ~60 s and gives up — in the
    background, where it costs nothing.
 
 2. **The whole bring-up is backgrounded (`( … ) &`).** ✅ `userland/S99zen:6-8`: a datapath problem
@@ -275,8 +276,13 @@ z3660amix
 0.0.0.0		anyhost
 127.0.0.1	localhost
 192.168.2.39	z3660amix z3660amix.alanara.fi
-192.168.2.2	files.alanara.fi
 ```
+
+A current image carries one more row that is **not** part of the identity: the package repository
+host, `pkg.amigaux.org` — the canonical Amix package channel (plain HTTP for `apkg`) since
+2026-09-14. The images are DNS-free, so firstboot bakes that host's address into this file; the
+address and the firstboot step are owned by `../amix-installng` (its profiles' `FB_REPO_HOST` /
+`FB_REPO_IP`), not by this repo. Leave that row alone when re-addressing the box.
 
 **3. ★ `/etc/net/{ticlts,ticots,ticotsord}/hosts`** — the one that is easy to miss. Three separate
 files, one per local transport, each `@(#)rpcsvc:net_files/hosts 1.2`, each holding:

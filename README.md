@@ -41,7 +41,7 @@ The **only** real-HW blocker was an **INT6 interrupt storm**: the firmware raise
 Amiga INT6 on every received frame, but AMIX has no level-6 ethernet handler, so
 the LAN's ARP broadcasts storm the box into a hard lock. Fix = the driver writes
 `ZZ_CONFIG_DISABLE` so the firmware never raises INT6; RX is serviced by the bounded
-poll/drain callout instead (commit `b06cf45`). No firmware change was needed, and
+poll/drain callout instead (commit `028c8d2`). No firmware change was needed, and
 no cache maintenance was required either (the 030 data cache is transparent to the
 eth DDR windows here). The `Z3660ETH_CACHE_FLUSH` `#ifdef` that once held that
 maintenance is gone: 040/060 maintenance and an attach-time cache-inhibit assert
