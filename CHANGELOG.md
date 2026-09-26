@@ -140,7 +140,7 @@ Sites: `driver.conf`, `tools/patch-kernel.sh`, `userland/{S99zen,bringup.sh,netw
 **Docs-and-config only — built kernels and shipped `/dev/zen0` nodes still carry 48 until the
 next build (P5.4). A 51-built kernel with a stale `c 48 0` node opens an empty cdevsw row, and
 `S99zen` only mknods when the node is absent — existing roots need the stale node removed or
-re-mknod'd at P5.4.**
+re-mknod'd at P5.4.** (resolved: major 51 metal-verified 2026-09-09, see docs/ZEN0-BRINGUP.md)
 
 Q1 RESOLVED (`f12b2d5`) — `docs/ETHERNET-SCOPING.md` §2.5 now reads resolved instead of OPEN.
 AMIX does wire the level-6 autovector (`vec.s:36` → `p6int`), but `p6int` (`ttrap.s:118-134`) is
@@ -155,7 +155,7 @@ architecture, not a workaround.
 
 Found during the 2026-07-13 STREAMS "out of blocks" investigation and deliberately deferred then
 to avoid perturbing a live RX-path hunt (that hunt closed: the wedge was the cdfs page-crossing
-DMA wild write, since fixed). Host cross-build verified only — **bench/metal validation owed.**
+DMA wild write, since fixed). Host cross-build verified only — **bench/metal validation owed.** (still owed as of 2026-09-26; no run on record)
 
 - **[HIGH] RX trailer-arm removed** (`54729bb`). `toss_packet_up_stream()` carried stock `aen.c`'s
   4.2BSD trailer decode verbatim. An ethertype in 0x1000–0x1010 made `length = (sap-0x1000)*512`
