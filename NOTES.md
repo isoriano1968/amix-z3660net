@@ -1,5 +1,47 @@
 # NOTES — amix-z3660net
 
+## Probe failure leaked kernel VA (2026-09-27, AB-04)
+
+**Rule: map, probe, free on failure.** Anything `z3660eth_map()` maps before
+the probe is released on every failure path (`z3660eth_unmap()`, `sptfree(va, n, 0)`;
+flag 0 because these are board pages, not `page[]` frames).
+
+**The leak.** On the sptalloc arm (board at or above `VSECT1`, e.g. `autoconfig_rtg YES`
+putting the combo window at 0x40000000) the map takes two windows: `ZZ_REGS_PAGES` (1)
+and `ZZ_FRAME_PAGES` (32 at NBPP 4096; 64 on the 030 line). The failure returns after
+them (sptalloc half-failure, the F3-M0 cache check, the MAC-sanity probe) only zeroed
+`info->regs`; there was no `sptfree` in the file. So every failed open kept
+**33 pages** (65 on the 030 line). `S99zen` opens `/dev/zen` **16 times** at boot.
+On the AB-04 rig (amiberry, MAC registers read 0) that left **18 free sptmap pages**
+(549 with S99zen disabled; the kvwalk shows 16 leaked 1+32 pairs), so raw I/O and
+big kmem pools slept forever on `Km_BigWanted`: the DL-13 "stall". Evidence:
+`amiberry/testdata/ab04/run3/11-procs-stall.txt`, `run3/12-kvwalk.txt`,
+`run4/10-kstat-idle.txt`, `run6/10-kstat-idle.txt`. Metal never failed the probe,
+so it never showed there; a metal firmware whose MAC reads 0 would.
+
+**Also changed.**
+- A failure verdict is cached per board (`info->map_verdict`). Later opens return
+  it without mapping or probing. `z3660eth_reprobe` (a `/dev/kmem` poke) forgets
+  one verdict, for a firmware whose ethernet comes up late; there is no Zorro hot-plug.
+- One console line per verdict, keeping the grep-able prefix:
+  `zen: no Z3660 ethernet found (MAC reads 0x.. 0x..); opens fail errno 6`
+  (or `not AGA`, `no board`, `cache-inhibit check refused`).
+- `open` returns the real errno: `ENXIO` absent (cached), `ENOMEM` no kernel VA
+  (not cached, printed once; the next open retries, which is now leak-free).
+- Diagnostics: `z3660eth_map_fails`, `z3660eth_spt_freed`.
+- `close()` never unmaps (a mapped board stays mapped; `map()` returns early on it),
+  and the direct-map arm has nothing to free, so `z3660eth_unmap()` is the only teardown.
+
+**Object proof** (040 driver line, gcc-cross-amix env.sh with the T-9 flags, the
+`relink-040-z3660.sh` compile; HEAD 47092ee source rebuilds to `b93ce42d`, as pinned):
+`z3660eth_040.o` sha256 `a1f49c54d114cf76241abfa88bd60e46e500ada123a9c788d44cba5e153a2a4d`,
+`sum -r` `20612 14`. `sptfree` is called twice in `z3660eth_unmap` (`pea 1`, `pea 0x20`,
+flag 0), reached from the sptalloc-failure path in `z3660eth_map` and from
+`z3660eth_absent` (the other three failures). G2: `z3660ethxmit` 3, `z3660ethopen` 3,
+`z3660ethioctl` 2 `%sr` writes, unchanged. Board register accesses are unchanged,
+all `movel`. The only new undefined symbol is `sptfree`, which the driver-line
+kernel defines. `relink-040-z3660.sh` reports no unresolved symbols and 0 complaints.
+
 ## Interrupt masking (2026-09-27, review T-9)
 
 **Premise corrected.** `spl6()`/`splx()` exist: they are `static inline` in the
