@@ -82,6 +82,7 @@
 
 extern int	autocon();
 extern caddr_t	sptalloc();
+extern void	sptfree();
 extern int	timeout();
 extern void	bcopy(), bzero();
 
@@ -103,6 +104,7 @@ static void z3660ethioctl(), z3660eth_ioc_nak();
 static int  z3660eth_ioc_arg();
 static int  z3660ethproto(), z3660ethxmit();
 static int  z3660eth_map(), z3660eth_initialize();
+static void z3660eth_unmap();
 
 static struct module_info z3660eth_minfo =
 {
@@ -134,6 +136,7 @@ static int z3660eth_autoconfigured;
 unsigned long z3660eth_board_phys, z3660eth_last_rc, z3660eth_last_off, z3660eth_machi, z3660eth_maclo;
 unsigned char z3660eth_present;
 unsigned char z3660eth_direct_map;	/* 1 = section-0 identity, 0 = sptalloc'd */
+unsigned long z3660eth_spt_freed;	/* kernel-VA pages returned by sptfree() */
 
 #define WRLONG(base,off,val) (*(volatile unsigned long *)((base) + (off)) = (unsigned long)(val))
 #define RDLONG(base,off)     (*(volatile unsigned long *)((base) + (off)))
@@ -539,18 +542,20 @@ int board_index;
     if (bp < (unsigned long)VSECT1 &&
 	((unsigned long)VSECT1 - bp) >= (unsigned long)ZZ_WINDOW_TOP) {
 	z3660eth_direct_map = 1;
+	info->spt_mapped = 0;
 	info->regs  = (volatile unsigned char *)phystokv((paddr_t)base);
 	info->frame = (volatile unsigned char *)
 			phystokv((paddr_t)base + ZZ_RXBACKLOG_OFF);
     } else {
 	z3660eth_direct_map = 0;
+	info->spt_mapped = 1;		/* from here every failure must unmap */
 	info->regs = (volatile unsigned char *)sptalloc(ZZ_REGS_PAGES, PG_V,
 			phystopfn((paddr_t)base), 0);
 	info->frame = (volatile unsigned char *)sptalloc(ZZ_FRAME_PAGES, PG_V,
 			phystopfn((paddr_t)base + ZZ_RXBACKLOG_OFF), 0);
     }
     if (info->regs == 0 || info->frame == 0) {
-	info->regs = 0;			/* sptalloc failure, or a base of 0 */
+	z3660eth_unmap(info);		/* sptalloc failure, or a base of 0 */
 	return ENOMEM;
     }
     info->txwin = info->frame + ZZ_TXWIN_OFF;
@@ -561,7 +566,7 @@ int board_index;
      * z3660eth_cache == 0, which is every shipping image.
      */
     if ((e = z3660eth_ci_check(board_index)) != 0) {
-	info->regs = 0;
+	z3660eth_unmap(info);
 	return e;
     }
 
@@ -571,7 +576,7 @@ int board_index;
     z3660eth_machi = hi;
     z3660eth_maclo = lo;
     if (hi == 0xFFFFFFFF || (hi & 0xFFFF) == 0) {
-	info->regs = 0;			/* open bus / not a Z3660 window */
+	z3660eth_unmap(info);		/* open bus / not a Z3660 window */
 	z3660eth_present = 0;
 	return ENXIO;
     }
@@ -585,6 +590,38 @@ int board_index;
 
     z3660eth_present = 1;
     return 0;
+}
+
+/*
+ * Undo z3660eth_map()'s mapping.  THE RULE: map, probe, free on failure.  The
+ * sptalloc arm draws from sptmap, a fixed kernel-VA resource map that nothing
+ * else returns pages to; before AB-04 every failed probe kept 1 + ZZ_FRAME_PAGES
+ * pages (33 at NBPP 4096, 65 at 2048); on the AB-04 rig S99zen's 16 boot-time
+ * opens left 18 free sptmap pages (549 without S99zen), so raw I/O and big kmem
+ * pools slept forever on Km_BigWanted.
+ * flag 0 = unmap only: these are board pages, never page[] frames to release.
+ * The direct-map arm is an identity VA with nothing to give back.  close() never
+ * unmaps (a mapped board stays mapped for the kernel's life, and map() returns
+ * early on it), so this is the only teardown path.
+ */
+static void
+z3660eth_unmap(info)
+z3660eth_info_t *info;
+{
+    if (info->spt_mapped) {
+	if (info->regs) {
+	    sptfree((caddr_t)info->regs, ZZ_REGS_PAGES, 0);
+	    z3660eth_spt_freed += ZZ_REGS_PAGES;
+	}
+	if (info->frame) {
+	    sptfree((caddr_t)info->frame, ZZ_FRAME_PAGES, 0);
+	    z3660eth_spt_freed += ZZ_FRAME_PAGES;
+	}
+	info->spt_mapped = 0;
+    }
+    info->regs = 0;
+    info->frame = 0;
+    info->txwin = 0;
 }
 
 void

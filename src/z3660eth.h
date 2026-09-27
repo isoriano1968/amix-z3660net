@@ -209,6 +209,7 @@ typedef struct
     volatile int	 tx_busy;	/* serialises the single txwin */
     int			 poll_id;	/* timeout() id for the RX poll callout */
     int			 poll_running;
+    unsigned char	 spt_mapped;	/* regs/frame came from sptalloc() */
 } z3660eth_info_t;
 
 typedef struct
