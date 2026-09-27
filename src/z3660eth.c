@@ -105,6 +105,7 @@ static int  z3660eth_ioc_arg();
 static int  z3660ethproto(), z3660ethxmit();
 static int  z3660eth_map(), z3660eth_initialize();
 static void z3660eth_unmap();
+static int  z3660eth_absent();
 
 static struct module_info z3660eth_minfo =
 {
@@ -136,6 +137,17 @@ static int z3660eth_autoconfigured;
 unsigned long z3660eth_board_phys, z3660eth_last_rc, z3660eth_last_off, z3660eth_machi, z3660eth_maclo;
 unsigned char z3660eth_present;
 unsigned char z3660eth_direct_map;	/* 1 = section-0 identity, 0 = sptalloc'd */
+
+/*
+ * AB-04 (2026-09-27): a failed probe is remembered per board (info->map_verdict)
+ * so later opens neither map nor probe again, and it prints ONE console line.
+ * z3660eth_reprobe is the re-probe knob: poke it nonzero through /dev/kmem and
+ * the next open forgets one cached verdict and probes afresh (the knob clears
+ * itself).  For a firmware whose ethernet comes up after the first open; there
+ * is no Zorro hot-plug.  The counters are diagnostics for /dev/kmem readers.
+ */
+long z3660eth_reprobe;
+unsigned long z3660eth_map_fails;	/* probes that ended in a failure verdict */
 unsigned long z3660eth_spt_freed;	/* kernel-VA pages returned by sptfree() */
 
 #define WRLONG(base,off,val) (*(volatile unsigned long *)((base) + (off)) = (unsigned long)(val))
@@ -518,16 +530,19 @@ int board_index;
 
     if (info->regs)
 	return 0;
+    if (info->map_verdict) {		/* AB-04: probed before and failed */
+	if (!z3660eth_reprobe)
+	    return info->map_verdict;
+	z3660eth_reprobe = 0;
+	info->map_verdict = 0;
+    }
 
     if (!autocon(Z3660_PROD, board_index, &base, &size)) {
-	if (board_index != 0) {
-	    z3660eth_present = 0;
-	    return ENXIO;
-	}
-	if ((((*(volatile unsigned short *)VPOSR) >> 8) & 0x7F) < 0x22) {
-	    z3660eth_present = 0;
-	    return ENXIO;		/* ECS/OCS build box -- no Z3660 here */
-	}
+	if (board_index != 0)
+	    return z3660eth_absent(board_index, ENXIO, "no board", 0);
+	if ((((*(volatile unsigned short *)VPOSR) >> 8) & 0x7F) < 0x22)
+	    /* ECS/OCS build box -- no Z3660 here */
+	    return z3660eth_absent(board_index, ENXIO, "not AGA", 0);
 	base = Z3660_FIXED;		/* AGA: probe the fixed combo window */
     }
 
@@ -555,7 +570,18 @@ int board_index;
 			phystopfn((paddr_t)base + ZZ_RXBACKLOG_OFF), 0);
     }
     if (info->regs == 0 || info->frame == 0) {
-	z3660eth_unmap(info);		/* sptalloc failure, or a base of 0 */
+	/*
+	 * sptalloc failure (sptmap exhausted), or a base of 0.  Free whichever
+	 * half DID map.  Not cached: VA pressure is transient, so the next open
+	 * tries again -- which is safe now that nothing is kept on failure.
+	 */
+	z3660eth_unmap(info);
+	z3660eth_map_fails++;
+	if (!info->nomem_said) {
+	    info->nomem_said = 1;
+	    cmn_err(CE_NOTE,
+		"zen: no Z3660 ethernet found (kernel VA map failed); will retry");
+	}
 	return ENOMEM;
     }
     info->txwin = info->frame + ZZ_TXWIN_OFF;
@@ -565,21 +591,17 @@ int board_index;
      * cache line cannot be mistaken for a firmware answer.  A no-op with
      * z3660eth_cache == 0, which is every shipping image.
      */
-    if ((e = z3660eth_ci_check(board_index)) != 0) {
-	z3660eth_unmap(info);
-	return e;
-    }
+    if ((e = z3660eth_ci_check(board_index)) != 0)
+	return z3660eth_absent(board_index, e, "cache-inhibit check refused",
+			       0);
 
     /* verify the firmware ethernet register file answers (open bus => absent) */
     hi = RDLONG(info->regs, ZZ_ETH_MAC_HI);
     lo = RDLONG(info->regs, ZZ_ETH_MAC_LO);
     z3660eth_machi = hi;
     z3660eth_maclo = lo;
-    if (hi == 0xFFFFFFFF || (hi & 0xFFFF) == 0) {
-	z3660eth_unmap(info);		/* open bus / not a Z3660 window */
-	z3660eth_present = 0;
-	return ENXIO;
-    }
+    if (hi == 0xFFFFFFFF || (hi & 0xFFFF) == 0)	/* open bus / not a Z3660 window */
+	return z3660eth_absent(board_index, ENXIO, "MAC reads", 1);
 
     info->paddress[0] = (unsigned char)(hi >> 8);
     info->paddress[1] = (unsigned char)hi;
@@ -624,6 +646,34 @@ z3660eth_info_t *info;
     info->txwin = 0;
 }
 
+/*
+ * A failure verdict: unmap, cache errno e for this board so later opens return
+ * it without mapping or probing, and say so on the console ONCE (per verdict).
+ * The line keeps the "zen: no Z3660 ethernet found" prefix bench logs grep for.
+ * showmac: append the two MAC register words the probe read.
+ */
+static int
+z3660eth_absent(board_index, e, why, showmac)
+int board_index, e;
+char *why;
+int showmac;
+{
+    z3660eth_info_t *info = &z3660eth_board[board_index].z3660eth_info;
+
+    z3660eth_unmap(info);
+    z3660eth_present = 0;
+    z3660eth_map_fails++;
+    info->map_verdict = e;
+    if (showmac)
+	cmn_err(CE_NOTE,
+	    "zen: no Z3660 ethernet found (%s 0x%x 0x%x); opens fail errno %d",
+	    why, z3660eth_machi, z3660eth_maclo, e);
+    else
+	cmn_err(CE_NOTE,
+	    "zen: no Z3660 ethernet found (%s); opens fail errno %d", why, e);
+    return e;
+}
+
 void
 z3660eth_autoconfig()
 {
@@ -632,15 +682,15 @@ z3660eth_autoconfig()
     z3660eth_autoconfigured = 1;
     z3660eth_number_of_boards = 0;
 
+    /* a failure prints its own single line from z3660eth_map() */
     if (z3660eth_map(0) == 0)
 	z3660eth_number_of_boards = 1;
-    else
-	cmn_err(CE_NOTE, "zen: no Z3660 ethernet found");
 }
 
 /*
  * Bring a board up: ensure mapped, init the per-stream array, enable firmware
- * eth interrupt delivery, and start the RX poll callout.  Returns 1 / 0.
+ * eth interrupt delivery, and start the RX poll callout.  Returns 0, or the
+ * errno z3660eth_map() gave (ENXIO absent -- cached; ENOMEM no kernel VA).
  */
 static int
 z3660eth_initialize(board_index)
@@ -649,10 +699,10 @@ int board_index;
     z3660eth_board_t *board = &z3660eth_board[board_index];
     z3660eth_info_t *info = &board->z3660eth_info;
     z3660eth_t *zp;
-    int n;
+    int n, e;
 
-    if (z3660eth_map(board_index))
-	return 0;
+    if ((e = z3660eth_map(board_index)) != 0)
+	return e;
 
     for (n = 0, zp = board->z3660eth; n < Z3660ETH_MAXDEV; ++n, ++zp) {
 	zp->q = (queue_t *)NULL;
@@ -685,7 +735,7 @@ int board_index;
 	info->poll_id = timeout(z3660eth_poll, (caddr_t)(long)board_index,
 				Z3660ETH_POLL_TICKS);
     }
-    return 1;
+    return 0;
 }
 
 /* ----------------------------------------------------------------------------
@@ -702,7 +752,7 @@ cred_t *credp;
     register z3660eth_t *zp;
     register int minor_device, board_index, sap_index;
     z3660eth_board_t *board;
-    int s;
+    int s, e;
 
     if (sflag == MODOPEN || sflag == CLONEOPEN)
 	return EINVAL;
@@ -718,8 +768,9 @@ cred_t *credp;
     board = &z3660eth_board[board_index];
 
     if (board->z3660eth_status.board_state != Z3660ETH_BOARD_RUNNING) {
-	if (!z3660eth_initialize(board_index))
-	    return ENXIO;		/* no Z3660 present (e.g. WinUAE build box) */
+	/* no Z3660 present (e.g. WinUAE build box): ENXIO, cached, silent */
+	if ((e = z3660eth_initialize(board_index)) != 0)
+	    return e;
     }
     if (board->z3660eth_info.regs == 0)
 	return ENXIO;

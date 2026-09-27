@@ -209,7 +209,10 @@ typedef struct
     volatile int	 tx_busy;	/* serialises the single txwin */
     int			 poll_id;	/* timeout() id for the RX poll callout */
     int			 poll_running;
+    int			 map_verdict;	/* 0 = not probed/mapped; else the cached
+					   errno of a failed probe (ENXIO) */
     unsigned char	 spt_mapped;	/* regs/frame came from sptalloc() */
+    unsigned char	 nomem_said;	/* ENOMEM console line printed once */
 } z3660eth_info_t;
 
 typedef struct
