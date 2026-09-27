@@ -760,8 +760,6 @@ z3660ethwput(q, mp)
 register queue_t *q;
 register mblk_t *mp;
 {
-    register int s;
-
     switch (mp->b_datap->db_type) {
     case M_FLUSH:
 	if (*mp->b_rptr & FLUSHW) {
@@ -776,9 +774,12 @@ register mblk_t *mp;
 
     case M_PROTO:
     case M_PCPROTO:
-	s = splz3660eth();
+	/*
+	 * NOT masked as a whole (the hydra idiom was): proto reaches xmit, and
+	 * a mask here would hold IPL 4 across the ~1 ms TX trigger.  The few
+	 * sections that race the poll callout mask themselves (NOTES.md).
+	 */
 	(void)z3660ethproto(q, mp);
-	splx(s);
 	break;
 
     case M_IOCTL:
@@ -813,7 +814,9 @@ queue_t *q;
  * Transmit one DL_UNITDATA_REQ.  Returns 1 if the mblk was consumed (sent or
  * dropped), 0 if it must be re-queued (txwin busy with another transmit).  The
  * single shared txwin is serialised by info->tx_busy WITHOUT holding raised spl
- * across the ~1ms synchronous trigger (per ETHERNET-SCOPING.md Q2/Q7).
+ * across the ~1ms synchronous trigger (per ETHERNET-SCOPING.md Q2/Q7).  Only the
+ * claim (test-and-set) is masked; the release is one aligned store of a volatile
+ * int and needs no mask.  See NOTES.md "Interrupt masking", pair M1.
  */
 static int
 z3660ethxmit(q, mp)
@@ -830,7 +833,7 @@ mblk_t *mp;
     int s, n, pktsize;
     unsigned long rc;
 
-    s = splz3660eth();
+    s = splz3660eth();			/* M1: atomic claim of txwin + tmp[] */
     if (info->tx_busy || info->regs == 0) {
 	splx(s);
 	return 0;			/* defer; caller re-queues */
@@ -878,9 +881,7 @@ mblk_t *mp;
     rc = RDLONG(info->regs, ZZ_ETH_TX);
     z3660eth_last_rc = rc;
 
-    s = splz3660eth();
-    info->tx_busy = 0;
-    splx(s);
+    info->tx_busy = 0;			/* release: volatile store, after the rc load */
 
     if (rc == 0) {
 	board->z3660eth_status.packets_sent++;

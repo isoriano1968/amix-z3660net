@@ -161,20 +161,24 @@ typedef struct ether_header ether_header_t;
 #define Z3660ETH_INIT_PRI	(PZERO - 1)
 
 /*
- * Interrupt masking.  AMIX has NO spl6()/splx() primitives -- they exist in the
- * BSD/hydra idiom this skeleton was adapted from, but NOT in AMIX SVR4.0 (the
- * stock aen LANCE driver and z3660.c do ZERO explicit interrupt masking).  So
- * these are no-ops: a base-level critical section would, on real HW, need to
- * block the clock-level RX poll callout, but (a) Phase-1 never reaches the
- * datapath -- the probe ENXIOs with no GEM present -- and (b) proper RX/callout
- * synchronization is a real-HW (P3) concern, to be revisited when RX moves off
- * the polled timeout() callout (e.g. onto an int2_tbl ISR via a board-mod).
- * Referencing the nonexistent spl6/splx left them UNDEF in the kernel link,
- * which is what the relocunix `nm -u` check rejects.  See ETHERNET-SCOPING.md
- * Q1/Q2/Q7.
+ * Interrupt masking.  spl6()/splx() are the REAL stock primitives: static inline
+ * in <sys/inline.h> (inline.h:112-260).  An earlier revision of this header said
+ * AMIX has none and no-opped them; that was wrong -- the UNDEF seen in the first
+ * kernel link came from not including inline.h, and until gcc-cross-amix 7a1d727
+ * (-Dvolatile=__volatile__) the -traditional cross build would have deleted the
+ * asm anyway (review T-9).  On this kernel spl5/spl6/spl7/spltty/splhi all map
+ * to _spl4, i.e. SR = 0x2400 (inline.h:239-251): IPL 4, which blocks the level-2
+ * CIA-A clock and therefore every callout, including the RX poll.
+ *
+ * _spl4 SETS the IPL, it does not raise it: called above IPL 4 it would LOWER
+ * it.  Every caller here runs at base (IPL 0) or in the poll callout (which
+ * dispatches at IPL 4), so it only ever raises or re-states.  Which sections are
+ * masked, and the race each pair closes, is documented in NOTES.md
+ * ("Interrupt masking").  Keep every masked window a handful of instructions:
+ * never across the ~1 ms synchronous TX trigger, allocb(), or a STREAMS put.
  */
-#define splz3660eth()		0		/* was spl6() -- nonexistent in AMIX */
-#define splx(s)			((void)(s))	/* was splx()  -- nonexistent in AMIX */
+#include "sys/inline.h"
+#define splz3660eth()		spl6()
 
 #define Z3660ETH_POLL_TICKS	1	/* RX poll period (clock ticks) */
 
@@ -202,7 +206,7 @@ typedef struct
     volatile u_char	*txwin;		/* frame + ZZ_TXWIN_OFF */
     unsigned char	 paddress[6];	/* station MAC */
     unsigned short	 last_serial;	/* RX ring drain cursor (firmware serial) */
-    int			 tx_busy;	/* serialises the single txwin */
+    volatile int	 tx_busy;	/* serialises the single txwin */
     int			 poll_id;	/* timeout() id for the RX poll callout */
     int			 poll_running;
 } z3660eth_info_t;
