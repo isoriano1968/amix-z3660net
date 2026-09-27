@@ -665,6 +665,7 @@ cred_t *credp;
     register z3660eth_t *zp;
     register int minor_device, board_index, sap_index;
     z3660eth_board_t *board;
+    int s;
 
     if (sflag == MODOPEN || sflag == CLONEOPEN)
 	return EINVAL;
@@ -701,16 +702,27 @@ cred_t *credp;
     *devp = makedevice(getmajor(*devp), (((sap_index + 1) << 4) | board_index));
 
     zp = &board->z3660eth[sap_index];
-    if (zp->q)
-	return EBUSY;
 
+    /*
+     * M2: publish the slot atomically w.r.t. the poll callout, whose RX demux
+     * (toss_packet_up_stream) routes on zp->q, flags and sap.  close() clears
+     * only zp->q, so without the mask a tick between `zp->q = q' and the field
+     * resets would deliver frames up the new stream under the PREVIOUS
+     * occupant's sap / RAW flag.  zp->q is still stored last.
+     */
+    s = splz3660eth();
+    if (zp->q) {
+	splx(s);
+	return EBUSY;
+    }
     q->q_ptr = (char *)zp;
     WR(q)->q_ptr = (char *)zp;
-    zp->q = q;
     zp->board_index = board_index;
     zp->flags = 0;
     zp->state = DL_UNATTACHED;
     zp->sap = 0;
+    zp->q = q;
+    splx(s);
 
     if (!board->ifstats.ifs_name) {
 	board->ifstats.ifs_name = "zen";
@@ -1480,15 +1492,12 @@ mblk_t *mp;
     case Z3660ETH_GET_STATUS:
     {
 	caddr_t arg;
+	int s;
 
 	if (!z3660eth_ioc_arg(mp, iocbp, &arg)) {
 	    z3660eth_ioc_nak(q, mp, EINVAL);
 	    return;
 	}
-	board->z3660eth_status.if_ipackets = board->ifstats.ifs_ipackets;
-	board->z3660eth_status.if_opackets = board->ifstats.ifs_opackets;
-	board->z3660eth_status.if_ierrors = board->ifstats.ifs_ierrors;
-	board->z3660eth_status.if_oerrors = board->ifstats.ifs_oerrors;
 	if (mp->b_cont) {
 	    freemsg(mp->b_cont);
 	    mp->b_cont = NULL;
@@ -1497,7 +1506,19 @@ mblk_t *mp;
 	    z3660eth_ioc_nak(q, mp, ENOMEM);
 	    return;
 	}
+	/*
+	 * M3: one consistent snapshot.  The poll callout bumps these counters
+	 * (RX drain, deferred TX, tx_nolink); unmasked, a tick mid-copy yields a
+	 * torn record (packets_received and if_ipackets from different ticks).  108 bytes of
+	 * moves; allocb stays outside the window.
+	 */
+	s = splz3660eth();
+	board->z3660eth_status.if_ipackets = board->ifstats.ifs_ipackets;
+	board->z3660eth_status.if_opackets = board->ifstats.ifs_opackets;
+	board->z3660eth_status.if_ierrors = board->ifstats.ifs_ierrors;
+	board->z3660eth_status.if_oerrors = board->ifstats.ifs_oerrors;
 	*(z3660eth_status_t *)mp->b_cont->b_rptr = board->z3660eth_status;
+	splx(s);
 	mp->b_cont->b_wptr += sizeof(z3660eth_status_t);
 	if (iocbp->ioc_count == TRANSPARENT) {
 	    struct copyreq *creq = (struct copyreq *)mp->b_rptr;
