@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-27 — Interrupt masking made real (4e75876, a33bb6c, 47092ee; review T-9)
+
+The header no longer no-ops `spl6`/`splx` on the wrong "AMIX has none" premise: it includes the stock
+`<sys/inline.h>` (spl5..7 map to `_spl4`, SR 0x2400). Three masked sections: M1 the `tx_busy` claim in
+xmit; M2 open's slot publication (the RX demux could route frames up a new stream under the previous
+occupant's sap/RAW flag); M3 the GET_STATUS snapshot. The hydra-idiom whole-wput mask and the mask on the
+`tx_busy` release were deliberately not added. Design in NOTES.md "Interrupt masking". Rebuilt with
+gcc-cross-amix 7a1d727: z3660eth_040.o b93ce42d… (sum -r 57252).
+
 ## 2026-09-09 — docs: the field-proven zen0 bring-up procedure; GRIMOIRE-HANDOFF cross-reference corrected (74d8564, ae808a7)
 
 `docs/ZEN0-BRINGUP.md` records the bring-up as it was actually done on metal (major 51 verified on the
