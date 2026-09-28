@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-27 — AB-04: free the mapping windows on a failed probe; cache the verdict (a3571ed, 586ba6f, 8449d53)
+
+z3660eth_map() now sptfree()s both kernel-VA windows on every failure path; before, each failed probe on
+the sptalloc arm leaked 33 pages (65 on the 030 line) and S99zen's 16 boot opens exhausted sptmap:
+the rig's "DL-13 stall". A failed probe is cached per board (later opens return the errno without
+mapping or probing again), one console line, real errno (ENXIO absent / ENOMEM no VA), z3660eth_reprobe
+forgets one verdict. Object z3660eth_040.o a1f49c54 (sum -r 20612). Metal-proven inside KD060-Z (T-10).
+
 ## 2026-09-27 — Interrupt masking made real (4e75876, a33bb6c, 47092ee; review T-9)
 
 The header no longer no-ops `spl6`/`splx` on the wrong "AMIX has none" premise: it includes the stock
