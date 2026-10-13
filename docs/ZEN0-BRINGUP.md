@@ -281,7 +281,7 @@ z3660amix
 A current image carries one more row that is **not** part of the identity: the package repository
 host, `pkg.amigaux.org` — the canonical Amix package channel (plain HTTP for `apkg`) since
 2026-09-14. The images are DNS-free, so firstboot bakes that host's address into this file; the
-address and the firstboot step are owned by `../amix-installng` (its profiles' `FB_REPO_HOST` /
+address and the firstboot step are owned by [amix-installng](https://github.com/jusii/amix-installng) (its profiles' `FB_REPO_HOST` /
 `FB_REPO_IP`), not by this repo. Leave that row alone when re-addressing the box.
 
 **3. ★ `/etc/net/{ticlts,ticots,ticotsord}/hosts`** — the one that is easy to miss. Three separate

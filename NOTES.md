@@ -14,10 +14,10 @@ them (sptalloc half-failure, the F3-M0 cache check, the MAC-sanity probe) only z
 **33 pages** (65 on the 030 line). `S99zen` opens `/dev/zen` **16 times** at boot.
 On the AB-04 rig (amiberry, MAC registers read 0) that left **18 free sptmap pages**
 (549 with S99zen disabled; the kvwalk shows 16 leaked 1+32 pairs), so raw I/O and
-big kmem pools slept forever on `Km_BigWanted`: the DL-13 "stall". Evidence:
-`amiberry/testdata/ab04/run3/11-procs-stall.txt`, `run3/12-kvwalk.txt`,
-`run4/10-kstat-idle.txt`, `run6/10-kstat-idle.txt`. Metal never failed the probe,
-so it never showed there; a metal firmware whose MAC reads 0 would.
+big kmem pools slept forever on `Km_BigWanted`: the DL-13 "stall". Evidence kept
+locally, not published (amiberry AB-04 test runs: process, kvwalk and kstat captures).
+Metal never failed the probe, so it never showed there; a metal firmware whose MAC
+reads 0 would.
 
 **Also changed.**
 - A failure verdict is cached per board (`info->map_verdict`). Later opens return
@@ -33,7 +33,8 @@ so it never showed there; a metal firmware whose MAC reads 0 would.
   and the direct-map arm has nothing to free, so `z3660eth_unmap()` is the only teardown.
 
 **Object proof** (040 driver line, gcc-cross-amix env.sh with the T-9 flags, the
-`relink-040-z3660.sh` compile; HEAD 47092ee source rebuilds to `b93ce42d`, as pinned):
+`relink-040-z3660.sh` compile — that script lives on a private branch of the
+040/060 port repo, not published; HEAD 47092ee source rebuilds to `b93ce42d`, as pinned):
 `z3660eth_040.o` sha256 `a1f49c54d114cf76241abfa88bd60e46e500ada123a9c788d44cba5e153a2a4d`,
 `sum -r` `20612 14`. `sptfree` is called twice in `z3660eth_unmap` (`pea 1`, `pea 0x20`,
 flag 0), reached from the sptalloc-failure path in `z3660eth_map` and from

@@ -113,3 +113,12 @@ MIT — see [`LICENSE`](LICENSE). The STREAMS/DLPI scaffolding was originally ad
 from Commodore's stock AMIX `aen`/`hydra` drivers; the MIT grant covers this repo's
 own work. AMIX itself (SVR4.0) is proprietary — you need a licensed AMIX system and a
 Z3660 accelerator to build and run this driver.
+
+### Trademarks
+The wording Amiga Corporation asked us to carry:
+
+This project and its developers are not affiliated with, endorsed by, or sponsored by
+Amiga Corporation. Amiga is a registered trademark of Amiga Corporation.
+
+AmigaOS and Amiga UNIX are trademarks of their respective owners, and UNIX is a
+registered trademark of The Open Group. See [`NOTICE`](NOTICE).
