@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-13 — Publication scrub before the first push since August (fb2059e)
+
+README licence section and a new NOTICE carry the Amiga Corporation trademark wording; NOTES marks the AB-04 evidence
+as local-only and relink-040-z3660.sh as private port tooling; ZEN0-BRINGUP links amix-installng by its GitHub URL.
+
 ## 2026-09-27 — AB-04: free the mapping windows on a failed probe; cache the verdict (a3571ed, 586ba6f, 8449d53)
 
 z3660eth_map() now sptfree()s both kernel-VA windows on every failure path; before, each failed probe on
